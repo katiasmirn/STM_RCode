@@ -1,0 +1,2507 @@
+---
+title: "Fecal Bile Acids in Alcoholic Hepatitis"
+author: "Smirnova, E."
+date: "`r Sys.Date()`"
+output:
+  html_document
+---
+
+
+```{r setup, echo=FALSE, message=FALSE, warning=FALSE}
+rm(list=ls())
+# Set up the environment
+library(knitr)
+opts_chunk$set(cache.path='cache/', fig.path='img/', cache=F, tidy=T, fig.keep='high', echo=F, dpi=100, warnings=F, message=F, comment=NA, warning=F, results='as.is', fig.width = 10, fig.height = 6) #out.width=700, 
+library(pander)
+panderOptions('table.split.table', Inf)
+set.seed(1)
+library(dplyr)
+options(stringsAsFactors = FALSE)
+set.seed(41235)
+```
+
+
+```{r libraries, echo=FALSE}
+library(ggplot2)
+library(cowplot)
+library(readxl)
+library(kableExtra)
+library(phyloseq)
+library(cowplot)
+library(plyr)
+library(dplyr)
+library(magrittr)
+library(reshape2)
+library(tableone)
+library(ape)
+library(ade4)
+library(vegan)
+library(usedist)
+library(ggcorrplot)
+library(microbiome)
+library(caret)
+library(ggpubr)
+library(DESeq2)
+library(Matrix)
+library(dunn.test)
+library(FSA)
+library(ggdendro)
+library(genefilter)
+library(leaps)
+library(MASS)
+library(pander)
+library(tbrf)
+library(gridExtra)
+#devtools::install_github("ricardo-bion/ggradar", dependencies=TRUE)
+library(ggradar)
+#suppressPackageStartupMessages(library(dplyr))
+library(scales)
+library(tibble)
+library(rfUtilities)
+library(tidyr)
+library(qvalue)
+library(RCy3)
+library(gProfileR)
+library(RCurl)
+library(EnrichmentBrowser)
+library(igraph)
+#BiocManager::install("EnrichmentBrowser")
+```
+
+# Data setup and objectives
+
+
+```{r}
+#######################################
+#16S data
+#######################################
+fileName16S <- "Fixed ALD_Data_PieCharts.xlsx"
+#metadata common to both taxa and stool samples
+fileNameMeta <- "AH_meta_final-Katia.xlsx"
+fileNameMetaLink <- "TREAT_Sample_for_Katia.xlsx"
+fileNameMetaUpdated <- "meta_metabol.xlsx"
+# Read in the phylum data
+mtx_16S <- read_excel(here::here("Data", fileName16S), sheet = 1, skip = 186, n_max = 347)
+reads <- unlist(mtx_16S[dim(mtx_16S)[1],-1])
+mtx_16S <- data.frame(mtx_16S[-dim(mtx_16S)[1],])
+rownames(mtx_16S) <- unlist(mtx_16S[,1])
+mtx_16S <- mtx_16S[,-1]
+mtx_16S_count <- sweep(mtx_16S, 2, reads, '*')
+
+#create taxa table
+taxa_mat <- data.frame(x=rownames(mtx_16S))  %>%  separate(x, 
+                      into = c("Phylum", "Class", "Order", "Family", "Genus"))
+rownames(taxa_mat) <- rownames(mtx_16S)
+
+#meta data
+meta <- read_excel(here::here("Data", 
+                                 fileNameMeta), sheet =1)
+metaLink <- read_excel(here::here("Data", 
+                                 fileNameMetaLink), sheet ="Sheet1")
+metaLink$Linkage <- gsub(".", "_", metaLink$`#SampleID`, fixed = TRUE)
+names(metaLink)[which(names(metaLink) == "Class")] <- "Class_VCU"
+#merge with metadata
+meta <- merge(meta, metaLink,by = "Linkage")
+#phyloseq object -- match meta with taxa names
+meta <- meta[match(colnames(mtx_16S), meta$Linkage),] 
+#meta$Linkage == colnames(mtx_16S)
+rownames(meta) <- meta$Linkage
+
+#updated metadata file
+meta2 <- read_excel(here::here("Data", 
+                                 fileNameMetaUpdated), sheet ="meta_metabol_stool")
+#proportions data
+physeq <- phyloseq(otu_table(mtx_16S, taxa_are_rows = TRUE),
+                   sample_data(meta),
+                   tax_table(as.matrix(taxa_mat)))
+#count data
+physeq_count <- phyloseq(otu_table(mtx_16S_count, taxa_are_rows = TRUE),
+                   sample_data(meta),
+                   tax_table(as.matrix(taxa_mat)))
+
+```
+
+
+```{r settings, echo=FALSE}
+
+fileNamestool_metabol <- "VACU-0101-17VWBL CLIENT DATA TABLES AND STATS - FECES.XLSX"
+
+#sample data
+metabol_orig_stool <- read_excel(here::here("Data", "Data_from_AJS_151119", "ProjectFiles-VACU-0101-17VWBL",
+                                 fileNamestool_metabol), sheet ="ScaledImpData")
+
+#re-organize into workable format that separates the data into sample information
+#stool_metabolytes information and stool_metabolites measurements
+
+#samples info
+metabol_sample_stool <- metabol_orig_stool[1:9, -c(1:12)]
+tmp <- gsub(" ", "_", unlist(metabol_sample_stool[, 1]))
+metabol_sample_stool <- t(metabol_sample_stool[,-1])
+colnames(metabol_sample_stool) <- tmp
+#add a row with sample type 
+metabol_sample_stool <- data.frame(metabol_sample_stool)
+metabol_sample_stool$type <- sub('\\..*', '', rownames(metabol_sample_stool))
+names(metabol_sample_stool)[names(metabol_sample_stool) == "Group_HMDB"] <- "Group"
+metabol_sample_stool$Group[metabol_sample_stool$Group =="N"] <- "HC"
+metabol_sample_stool$Group[metabol_sample_stool$Group =="H"] <- "HDC"
+metabol_sample_stool$Group[metabol_sample_stool$Group =="M"] <- "MAH"
+metabol_sample_stool$Group[metabol_sample_stool$Group =="S"] <- "SAH"
+
+#stool_metabolites info
+metabol_stool <- metabol_orig_stool[-c(1:8), 1:13]
+colnames(metabol_stool) <- gsub(" ", "_", unlist(metabol_stool[1, ]))
+metabol_stool <- metabol_stool[-1,]
+rownames(metabol_stool) <- paste0("M_", metabol_stool$PATHWAY_SORTORDER)
+names(metabol_stool)[names(metabol_stool) == "Group_HMDB"] <- "HMDB"
+
+#stool_metabolites concentration
+metabol_mtx_stool <- metabol_orig_stool[-c(1:9), -c(1:13)]
+metabol_mtx_stool <- apply(as.matrix(metabol_mtx_stool), 2, as.numeric)
+rownames(metabol_mtx_stool) <- paste0("M_", metabol_stool$PATHWAY_SORTORDER)
+metabol_mtx_stool <- t(metabol_mtx_stool)
+#all metabolites 
+metabol_names_stool <- colnames(metabol_mtx_stool)
+
+#specific primary and secondary bile acids of interest
+fileMarkMetabol <- "Mark_comparisonList_StaticCopy.xlsx"
+# read in Mark's file to choose metabolites
+MetabolCompare_stool <- read_excel(here::here("Data", 
+                                 fileMarkMetabol), sheet ="Fecal BA")
+MetabolCompare_stool <- MetabolCompare_stool[-1,]
+MetabolCompare_stool$ID <- paste0("M_", MetabolCompare_stool$...2)
+names(MetabolCompare_stool) <- c("BIOCHEMICAL", "PATHWAY_SORTORDER", 
+              "Primary_Secondary", "Conj_Unconj", "Conj_type", "Comp12_OH", 
+              "Comp_12-OH_Fig1_2",  "Dihydroxy_Trihydroxy",
+              "Comp_7-dehydroxy", "Comp_7-dehydro_Fig_1_2",
+              "Keto" ,  "Epimer" , "Urso derivatives", "Grouping", "ID")
+
+#plot primary versus secondary
+#metabolites info
+metabol_names_stool_BA <- unname(unlist(MetabolCompare_stool[,"ID"]))
+  
+data_stool_all <- data.frame(metabol_mtx_stool, metabol_sample_stool)
+data_stool_all_log <- data_stool_all
+data_stool_all_log[,metabol_names_stool] <- log(data_stool_all_log[,metabol_names_stool])
+data_stool_BA <- data.frame(metabol_mtx_stool[,c(metabol_names_stool_BA)], 
+             metabol_sample_stool)
+```
+
+
+```{r}
+stool_taxa_id_file <- "all_id_10APR21.xlsx"
+#harmonize ids across files
+stool_taxa_id <- read_excel(here::here("Data", 
+                                 stool_taxa_id_file), sheet ="all_ids")
+is.na(stool_taxa_id) <- stool_taxa_id == 'NA'
+#add mapping ids to phyloseq
+
+stool_taxa_common <- stool_taxa_id[!is.na(stool_taxa_id$stool_taxa_id_mapping) & 
+                           !is.na(stool_taxa_id$taxa_id) &
+                     !is.na(stool_taxa_id$stool_id),]
+
+#replace taxa id in phyloseq
+physeq <- subset_samples(physeq, VCU_ID %in% stool_taxa_common$taxa_id)
+physeq_count <- subset_samples(physeq_count, VCU_ID %in% stool_taxa_common$taxa_id)
+
+#stool bile acids
+data_stool_BA_taxa_common <- subset(data_stool_BA, 
+                                    SUBJECT_ID %in% stool_taxa_common$stool_id)
+
+```
+
+
+```{r}
+#merge common taxa names into stool samples data
+metabol_sample_stool <- merge(metabol_sample_stool, stool_taxa_common,
+                              by.x = "CLIENT_IDENTIFIER", by.y = "stool_id",
+                              all.x = TRUE)
+
+#merge taxa metadata into stool metabolites
+
+#match stool samples
+
+#metabol_sample_stool2 <- merge(metabol_sample_stool, 
+#                                meta2, 
+#                                by.x = "taxa_id", by.y = "taxa_id",
+#                                suffixes = c("_orig", ""),
+#                                all.x = TRUE) 
+#write.csv(metabol_sample_stool2, "meta2.csv")
+
+metabol_sample_stool <- merge(metabol_sample_stool, 
+                                meta, 
+                                by.x = "taxa_id", by.y = "VCU_ID",
+                                suffixes = c("_orig", ""),
+                                all.x = TRUE) 
+
+write.csv(metabol_sample_stool, "meta.csv")
+
+is.na(metabol_sample_stool) <- metabol_sample_stool == "NA"
+#there is one sample that does not match either taxa or plasma data -- remove this one from analysis
+metabol_sample_stool <- metabol_sample_stool[!is.na(metabol_sample_stool$taxa_id),]
+#select only revelant variables
+vars_demogr<-  c("taxa_id",  "CLIENT_IDENTIFIER", "PARENT_SAMPLE_ID", "SUBJECT_ID", "type",   "Site_orig", "Site",
+        "MRN_SUBID",  "Linkage",  "PID", "studyid",  "Group",  "age", "GENDER", "BMI", "race", 
+      "TOTAL_CHOL", "HEMOGLOBIN", "WBC", "PLATELET", "CREATININE", "AST", "ALT", 
+      "TOTAL_BILIRUBIN", "ALBUMIN", "INR", "MELD_SCORE", "CHILDPUGH_SCORE", "DF_SCORE", 
+      "PROTHROM",  "PROTHROM_FIND" ,               "pt_upperlimit", 
+      "TLFB_AVG_drinksDD", "acid_suppress_meds", "acid_meds_type", "drink_diff")
+
+metabol_sample_stool <- metabol_sample_stool[,vars_demogr]
+metabol_sample_stool$BMI <- as.numeric(metabol_sample_stool$BMI)
+metabol_sample_stool$TOTAL_CHOL <- as.numeric(metabol_sample_stool$TOTAL_CHOL)
+metabol_sample_stool$HEMOGLOBIN <- as.numeric(metabol_sample_stool$HEMOGLOBIN)
+metabol_sample_stool$WBC <- as.numeric(metabol_sample_stool$WBC)
+metabol_sample_stool$PLATELET <- as.numeric(metabol_sample_stool$PLATELET)
+metabol_sample_stool$CREATININE <- as.numeric(metabol_sample_stool$CREATININE)
+metabol_sample_stool$AST <- as.numeric(metabol_sample_stool$AST)
+metabol_sample_stool$ALT <- as.numeric(metabol_sample_stool$ALT)
+metabol_sample_stool$TOTAL_BILIRUBIN <- as.numeric(metabol_sample_stool$TOTAL_BILIRUBIN)
+metabol_sample_stool$ALBUMIN <- as.numeric(metabol_sample_stool$ALBUMIN)
+metabol_sample_stool$INR <- as.numeric(metabol_sample_stool$INR)
+metabol_sample_stool$MELD_SCORE <- as.numeric(metabol_sample_stool$MELD_SCORE)
+metabol_sample_stool$CHILDPUGH_SCORE <- as.numeric(metabol_sample_stool$CHILDPUGH_SCORE)
+metabol_sample_stool$DF_SCORE <- as.numeric(metabol_sample_stool$DF_SCORE)
+metabol_sample_stool$TLFB_AVG_drinksDD <- as.numeric(metabol_sample_stool$TLFB_AVG_drinksDD)
+metabol_sample_stool$drink_diff <- as.numeric(metabol_sample_stool$drink_diff)
+metabol_sample_stool <- rename(metabol_sample_stool, c("Group" = "Class"))
+
+#limit to only the samples with available metadata
+metabol_mtx_stool <- metabol_mtx_stool[rownames(metabol_mtx_stool) %in% metabol_sample_stool$type,]
+metabol_sample_stool <- metabol_sample_stool[match(rownames(metabol_mtx_stool), metabol_sample_stool$type),]
+data_stool_all <- data.frame(metabol_mtx_stool, metabol_sample_stool)
+data_stool_all_log <- data_stool_all
+data_stool_all_log[,metabol_names_stool] <- log(data_stool_all_log[,metabol_names_stool])
+data_stool_BA <- data.frame(metabol_mtx_stool[,c(metabol_names_stool_BA)], 
+             metabol_sample_stool)
+
+```
+
+```{r}
+fileNameplasma_metabol <- "VACU-0102-17VWBL CLIENT DATA TABLES AND STATS - PLASMA.XLSX"
+
+#sample data
+metabol_plasma_orig <- read_excel(here::here("Data", "Data_from_AJS_151119", "ProjectFiles-VACU-0102-17VWBL",
+                                 fileNameplasma_metabol), sheet ="ScaledImpData")
+
+
+fileNameMetaPlasma <- "VCU_dataReq_05APR21.xlsx"
+fileNameMetaPlasmaLink <- "all_id_10APR21.xlsx"
+
+#Additional TREAT data for plasma samples
+metaPlasma <- read_excel(here::here("Data", 
+                                 fileNameMetaPlasma), sheet =1)
+metaPlasmaLink <- read_excel(here::here("Data", 
+                                 fileNameMetaPlasmaLink), sheet =1)
+
+#re-organize into workable format that separates the data into sample information
+#stool_metabolytes information and stool_metabolites measurements
+
+#samples info
+metabol_sample_plasma <- metabol_plasma_orig[1:9, -c(1:12)]
+tmp <- gsub(" ", "_", unlist(metabol_sample_plasma[, 1]))
+metabol_sample_plasma <- t(metabol_sample_plasma[,-1])
+colnames(metabol_sample_plasma) <- tmp
+#add a row with sample type 
+metabol_sample_plasma <- data.frame(metabol_sample_plasma)
+metabol_sample_plasma$type <- sub('\\..*', '', rownames(metabol_sample_plasma))
+names(metabol_sample_plasma)[names(metabol_sample_plasma) == "Group_HMDB"] <- "Group_Plasma"
+names(metabol_sample_plasma)[names(metabol_sample_plasma) == "GROUP"] <- "Group"
+metabol_sample_plasma$Group[metabol_sample_plasma$Group =="N"] <- "HC"
+metabol_sample_plasma$Group[metabol_sample_plasma$Group =="H"] <- "HDC"
+metabol_sample_plasma$Group[metabol_sample_plasma$Group =="M"] <- "MAH"
+metabol_sample_plasma$Group[metabol_sample_plasma$Group =="S"] <- "SAH"
+
+#plasma_metabolites info
+metabol_plasma <- metabol_plasma_orig[-c(1:8), 1:13]
+colnames(metabol_plasma) <- gsub(" ", "_", unlist(metabol_plasma[1, ]))
+metabol_plasma <- metabol_plasma[-1,]
+rownames(metabol_plasma) <- paste0("M_", metabol_plasma$PATHWAY_SORTORDER)
+names(metabol_plasma)[names(metabol_plasma) == "Group_HMDB"] <- "HMDB"
+
+#stool_metabolites concentration
+metabol_plasma_mtx <- metabol_plasma_orig[-c(1:9), -c(1:13)]
+metabol_plasma_mtx <- apply(as.matrix(metabol_plasma_mtx), 2, as.numeric)
+rownames(metabol_plasma_mtx) <- paste0("M_", metabol_plasma$PATHWAY_SORTORDER)
+metabol_plasma_mtx <- t(metabol_plasma_mtx)
+#all metabolites 
+metabol_names_plasma <- colnames(metabol_plasma_mtx)
+
+#specific primary and secondary bile acids of interest
+fileMarkMetabol <- "Mark_comparisonList_StaticCopy.xlsx"
+# read in Mark's file to choose metabolites
+MetabolCompare_plasma <- read_excel(here::here("Data", 
+                                 fileMarkMetabol), sheet ="Plasma BA")
+MetabolCompare_plasma <- MetabolCompare_plasma[-1,]
+MetabolCompare_plasma$ID <- paste0("M_", MetabolCompare_plasma$...2)
+names(MetabolCompare_plasma) <- c("BIOCHEMICAL", "PATHWAY_SORTORDER", 
+              "Primary_Secondary", "Conj_Unconj", "Conj_type", "Comp12_OH", 
+              "Comp_12-OH_Fig1_2",  "Dihydroxy_Trihydroxy",
+              "Comp_7-dehydroxy", "Comp_7-dehydro_Fig_1_2",
+              "Keto" ,  "Epimer" , "Urso derivatives",  "Grouping","ID")
+
+#plot primary versus secondary
+#metabolites info
+metabol_names_plasma_BA <- unname(unlist(MetabolCompare_plasma[,"ID"]))
+  
+data_plasma_all <- data.frame(metabol_plasma_mtx, metabol_sample_plasma)
+data_plasma_all_log <- data_plasma_all
+data_plasma_all_log[,metabol_names_plasma] <- log(data_plasma_all_log[,metabol_names_plasma])
+data_plasma_BA <- data.frame(metabol_plasma_mtx[,c(metabol_names_plasma_BA)], 
+             metabol_sample_plasma)
+
+```
+
+```{r}
+metabol_sample_plasma <- merge(metabol_sample_plasma, 
+                                stool_taxa_id, 
+                                by.x = "CLIENT_IDENTIFIER", by.y = "plasma_id",
+                                suffixes = c("_orig", ""),
+                                all.x = TRUE)
+
+#change to that part when all data are ready
+metabol_sample_plasma2 <- read.csv(here::here("Data", "metabol_sample_plasma.csv"))
+
+metabol_sample_plasma <- merge(metabol_sample_plasma, 
+                                metabol_sample_plasma2, 
+                                by.x = "SUBJECT_ID", by.y = "SUBJECT_ID",
+                                suffixes = c("_orig", ""),
+                                all.x = TRUE)
+
+
+#calculate meld score
+#limit stool and plasma metabolites data to only samples with available metadata
+#limit to only the samples with available metadata
+metabol_plasma_mtx <- metabol_plasma_mtx[rownames(metabol_plasma_mtx) %in% metabol_sample_plasma$type,]
+metabol_sample_plasma <- metabol_sample_plasma[match(rownames(metabol_plasma_mtx),
+                                                   metabol_sample_plasma$type),]
+
+data_plasma_all <- data.frame(metabol_plasma_mtx, metabol_sample_plasma)
+data_plasma_all_log <- data_plasma_all
+data_plasma_all_log[,metabol_names_plasma] <- log(data_plasma_all_log[,metabol_names_plasma])
+data_plasma_BA <- data.frame(metabol_plasma_mtx[,c(metabol_names_plasma_BA)], 
+             metabol_sample_plasma)
+```
+
+
+## Cohort demographics 
+
+Stool data
+
+```{r demog_stool}
+
+demog = metabol_sample_stool
+
+vars =   c("age", "GENDER", "BMI", "race",  "HEMOGLOBIN", "WBC", 
+             "PLATELET", "CREATININE", "AST", "ALT", "TOTAL_BILIRUBIN", "ALBUMIN", 
+             "INR", "MELD_SCORE", "CHILDPUGH_SCORE", "DF_SCORE")
+
+
+demog$race[demog$race ==1] <- "American Indian or Alaska Native"
+demog$race[demog$race ==2] <- "Asian"
+demog$race[demog$race ==3] <- "Black or African American"
+demog$race[demog$race ==5] <- "Native Hawaiian or Other Pacific Islander"
+demog$race[demog$race ==6] <- "Unknown"
+demog$race[demog$race ==7] <- "White"
+demog$race[demog$race ==8] <- "More than one race"
+demog$race[demog$race ==9] <- "Other"
+
+demog$race <- factor(demog$race)
+
+tab = tableone::CreateTableOne(
+  vars =  vars,
+  data = summarytools::unlabel(demog), strata = "Class", includeNA = TRUE)
+tab <- print(tab, printToggle = FALSE, showAllLevels = TRUE)
+
+#remove values with 90% missing in each group to still calculate p-value based on the other 3 groups
+#demog2 <- demog
+#demog2[demog2$Class == "MAH", "TOTAL_CHOL"] <- NA
+#demog2[demog2$Class == "HC", "PLATELET"] <- NA
+#demog2[demog2$Class == "HC", "TOTAL_BILIRUBIN"] <- NA
+#demog2[demog2$Class == "HC", "ALBUMIN"] <- NA
+
+#tab2 = tableone::CreateTableOne(
+#  vars =   vars,
+#  data = summarytools::unlabel(demog2), strata = "Class", includeNA = TRUE)
+#tab2 <- print(tab2, printToggle = FALSE, showAllLevels = TRUE)
+#pval.inx <- which(colnames(tab) =="p")
+
+#replace na's for p-values in demographics table
+#tab[,pval.inx] <- tab2[,pval.inx]
+
+kable(tab[,!(colnames(tab) %in% "test")], digits =3)%>%
+  kable_styling(bootstrap_options = c("striped", "hover"), full_width = F)
+```
+
+Plasma data
+
+```{r demog_plasma}
+
+demog = metabol_sample_plasma
+demog$INR[demog$Class == "HC"] <- NA
+vars =   c("age", "GENDER", "BMI", "race",  "HEMOGLOBIN", "WBC", 
+             "PLATELET", "CREATININE", "AST", "ALT", "TOTAL_BILIRUBIN", "ALBUMIN", 
+             "INR", "MELD_SCORE", "CHILDPUGH_SCORE", "DF_SCORE")
+
+
+demog$race[demog$race ==1] <- "American Indian or Alaska Native"
+demog$race[demog$race ==2] <- "Asian"
+demog$race[demog$race ==3] <- "Black or African American"
+demog$race[demog$race ==5] <- "Native Hawaiian or Other Pacific Islander"
+demog$race[demog$race ==6] <- "Unknown"
+demog$race[demog$race ==7] <- "White"
+demog$race[demog$race ==8] <- "More than one race"
+demog$race[demog$race ==9] <- "Other"
+
+demog$race <- factor(demog$race)
+
+tab = tableone::CreateTableOne(
+  vars =  vars,
+  data = summarytools::unlabel(demog), strata = "Class", includeNA = TRUE)
+tab <- print(tab, printToggle = FALSE, showAllLevels = TRUE)
+
+#remove values with 90% missing in each group to still calculate p-value based on the other 3 groups
+#demog2 <- demog
+#demog2[demog2$Class == "MAH", "TOTAL_CHOL"] <- NA
+#demog2[demog2$Class == "HC", "PLATELET"] <- NA
+#demog2[demog2$Class == "HC", "TOTAL_BILIRUBIN"] <- NA
+#demog2[demog2$Class == "HC", "ALBUMIN"] <- NA
+
+#tab2 = tableone::CreateTableOne(
+#  vars =   vars,
+#  data = summarytools::unlabel(demog2), strata = "Class", includeNA = TRUE)
+#tab2 <- print(tab2, printToggle = FALSE, showAllLevels = TRUE)
+#pval.inx <- which(colnames(tab) =="p")
+
+#replace na's for p-values in demographics table
+#tab[,pval.inx] <- tab2[,pval.inx]
+
+kable(tab[,!(colnames(tab) %in% "test")], digits =3)%>%
+  kable_styling(bootstrap_options = c("striped", "hover"), full_width = F)
+```
+
+
+# Significant metabolites
+
+
+## Primary and secondary bile acids in stool
+
+
+```{r primary_secondary_box_all_stool, fig.width = 12, fig.height = 8}
+
+metabol_box_all_stool <- subset(metabol_stool, rownames(metabol_stool) %in% metabol_names_stool_BA)
+metabol_box_all_stool <- merge(metabol_box_all_stool,  MetabolCompare_stool,
+                        by = c("BIOCHEMICAL", "PATHWAY_SORTORDER"))
+#metabolites measurements
+df_metabol_box_stool <- data_stool_BA[,c("SUBJECT_ID","Class",metabol_names_stool_BA)]
+#all AH
+tmp <- df_metabol_box_stool[df_metabol_box_stool$Class %in%  c("MAH", "SAH"), ]
+tmp$Class <- "AH"
+df_metabol_box_stool <- rbind(df_metabol_box_stool, tmp)
+df_metabol_box_stool$Class <- factor(df_metabol_box_stool$Class, 
+                               levels = c("HDC", "AH", "MAH", "SAH"))
+df_metabol_box_stool.m <- melt(df_metabol_box_stool, id.vars = c("SUBJECT_ID", "Class"))
+#merge Classs of interest
+df_metabol_box_stool.m <- merge(df_metabol_box_stool.m, metabol_box_all_stool,
+                          by.x = "variable", by.y = "ID")
+
+df_metabol_box_stool.m$Primary_Secondary <- factor(df_metabol_box_stool.m$Primary_Secondary,
+                                                   levels = c("P", "S", "O"))
+
+primary_secondary_box_all_stool <- ggplot(df_metabol_box_stool.m, 
+              aes(x=BIOCHEMICAL, y=value, fill = Class)) +
+  geom_boxplot() + 
+  #geom_point(size = 3, position = position_jitter(width = 0.1, 
+  #              height = 0), alpha = 0.5) +
+  facet_grid(~Primary_Secondary, scales = "free_x", space = 'free')+
+  theme_bw() + scale_y_log10(labels = scales::math_format())+
+  theme(legend.position = "bottom",
+        axis.title = element_text(color="black", size=10),
+        axis.text = element_text(color="black", size=10),
+        legend.title = element_blank(),
+        legend.text=element_text(size=8),
+        axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1)) +
+  scale_color_manual(values = c("darkolivegreen4", "gold", "red", "darkred")) +
+  scale_fill_manual(values = c("darkolivegreen4", "gold", "red", "darkred")) +
+  ylab("Peak") +
+  xlab("")
+
+primary_secondary_box_all_stool
+
+```
+
+
+
+```{r}
+library(rstatix)
+df_metabol_box_stool.m$log10_value <- log10(df_metabol_box_stool.m$value)
+primary_secondary_stool.test <- df_metabol_box_stool.m %>%
+  group_by(BIOCHEMICAL) %>%
+  t_test(log10_value ~ Class) 
+
+#create comparison id
+primary_secondary_stool.test$comparison <- unite(primary_secondary_stool.test[,c("group2", "group1")], comparison, sep = "_")$comparison
+
+#select only the subset of comparisons we are interested in
+#and do r-value adjust only for those
+primary_secondary_stool.test <- subset(primary_secondary_stool.test,
+                     comparison %in% c("AH_HDC", "SAH_MAH"))
+
+primary_secondary_stool.test <- 
+  primary_secondary_stool.test %>%
+  adjust_pvalue(method = "BH") %>%
+  add_significance()
+
+#adjust p-values with q-values and compare with KS-test
+#false discovery rates
+qobj <- qvalue(primary_secondary_stool.test$p, fdr.level = 0.1)
+#plot(qobj)
+#hist(qobj)
+primary_secondary_stool.test$q.value <- qobj$qvalues
+primary_secondary_stool.test$q.value.sign <- qobj$significant
+  
+```
+
+
+```{r}
+#add group means to t-tests data
+tmp.fold <- aggregate(log10_value ~ Class + BIOCHEMICAL, data = df_metabol_box_stool.m, mean)
+stool_test_AH <- subset(primary_secondary_stool.test, group2 == "AH")
+
+#merge AH log10_mean
+stool_test_AH <- merge(stool_test_AH, subset(tmp.fold, Class == "AH")[,c("BIOCHEMICAL", "log10_value")],
+                        by = "BIOCHEMICAL")
+
+stool_test_AH <- merge(stool_test_AH, subset(tmp.fold, Class == "HDC")[,c("BIOCHEMICAL", "log10_value")],
+                        by = "BIOCHEMICAL", suffixes = c("_AH", "_HDC"))
+```
+
+
+```{r}
+#Moderate versus severe AH
+stool_test_MAH <- subset(primary_secondary_stool.test, group1 == "MAH")
+
+#merge AH log10_mean
+stool_test_MAH <- merge(stool_test_MAH, subset(tmp.fold, Class == "MAH")[,c("BIOCHEMICAL", "log10_value")],
+                        by = "BIOCHEMICAL")
+
+stool_test_MAH <- merge(stool_test_MAH, subset(tmp.fold, Class == "SAH")[,c("BIOCHEMICAL", "log10_value")],
+                        by = "BIOCHEMICAL", suffixes = c("_MAH", "_SAH"))
+```
+
+
+```{r}
+tmp.fold <- aggregate(value ~ Class + BIOCHEMICAL, data = df_metabol_box_stool.m, mean)
+res.fold_stool <- data.frame(AH_HDC=integer(),
+                             SAH_MAH = integer())
+#calculate foldchange (ratio of the means) for each group
+for (i in 1:length(unique(tmp.fold$BIOCHEMICAL))){
+  print(i)
+  metabol <- unique(tmp.fold$BIOCHEMICAL)[i]
+  #ratio of AH/H
+  tmp_num <- subset(tmp.fold, BIOCHEMICAL == metabol & Class == "AH")
+  tmp_den <- subset(tmp.fold, BIOCHEMICAL == metabol & Class == "HDC")
+  res.fold_stool[i,"AH_HDC"] <- tmp_num$value/tmp_den$value
+  
+  #ratio of S/M
+  tmp_num <- subset(tmp.fold, BIOCHEMICAL == metabol & Class == "SAH")
+  tmp_den <- subset(tmp.fold, BIOCHEMICAL == metabol & Class == "MAH")
+  res.fold_stool[i,"SAH_MAH"] <- tmp_num$value/tmp_den$value
+ 
+}
+#add metabolite name
+res.fold_stool$BIOCHEMICAL <- unique(tmp.fold$BIOCHEMICAL)
+res.fold_stool.m <- melt(res.fold_stool, id.vars = "BIOCHEMICAL")
+colnames(res.fold_stool.m)[which(colnames(res.fold_stool.m) == "variable")] <- "comparison"
+colnames(res.fold_stool.m)[which(colnames(res.fold_stool.m) == "value")] <- "FoldChange"
+
+#merge with p-value tests
+primary_secondary_stool.test <- merge(primary_secondary_stool.test,
+                                       res.fold_stool.m,
+                                       by = c("comparison", "BIOCHEMICAL"))
+primary_secondary_stool.test$log2FoldChange <- log2(primary_secondary_stool.test$FoldChange)
+#create up and down columns
+primary_secondary_stool.test$diffexpressed <- "NO"
+# if log2Foldchange > 0.6 and pvalue < 0.1, set as "UP" 
+primary_secondary_stool.test$diffexpressed[primary_secondary_stool.test$log2FoldChange > 0.6 & primary_secondary_stool.test$p.adj < 0.1] <- "UP"
+# if log2Foldchange < -0.6 and pvalue < 0.05, set as "DOWN"
+primary_secondary_stool.test$diffexpressed[primary_secondary_stool.test$log2FoldChange < -0.6 & primary_secondary_stool.test$p.adj < 0.1] <- "DOWN"
+
+```
+
+
+Plot only those metabolites that had at least one comparison with  a significant q-value.
+
+```{r}
+names_sign_stool_BIOCHEMICAL <- unique(primary_secondary_stool.test$BIOCHEMICAL[
+                  primary_secondary_stool.test$q.value.sign == TRUE])
+
+kable(subset(primary_secondary_stool.test, BIOCHEMICAL %in% names_sign_stool_BIOCHEMICAL), digits =3)%>%
+  kable_styling(bootstrap_options = c("striped", "hover"), full_width = F)
+
+```
+
+
+
+```{r primary_secondary_box_stool}
+
+
+labels_Grouping <- c("1" = "7 alpha",
+            "2" = "27 alpha", 
+            "3" = "Other \ngut modified",
+            "4" = "Other \n modified")
+
+labels_Primary <- c(P= "Primary",
+             S = "Secondary",
+             O = "")
+
+labels_Conjug <- c(C= "Conjugated",
+             UC = "Unconjugated")
+
+#plot by groups and comparisons
+#7 alpha
+#27 alpha
+#Other gut modified
+
+primary_secondary_box_stool_H_AH <- ggplot(subset(df_metabol_box_stool.m, 
+            BIOCHEMICAL %in% names_sign_stool_BIOCHEMICAL & 
+              Class %in% c("HDC", "AH")), 
+              aes(x=BIOCHEMICAL, y=value, fill = Class)) +
+  geom_boxplot() + 
+  #geom_point(size = 3, position = position_jitter(width = 0.1, 
+  #              height = 0), alpha = 0.5) +
+  facet_grid(~Grouping + Primary_Secondary, scales = "free_x", space = 'free',
+             labeller=labeller(Grouping = labels_Grouping, Primary_Secondary = labels_Primary))+
+  theme_bw() + scale_y_log10(labels = scales::math_format())+
+  theme(legend.position = "right",
+        strip.text = element_text(size=12),
+        axis.title = element_text(color="black", size=14),
+        axis.text = element_text(color="black", size=14),
+        legend.title = element_blank(),
+        legend.text=element_text(size=12),
+        axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1)) +
+  scale_color_manual(values = c("HDC" = "darkolivegreen4", "AH" = "gold", "MAH" ="red", "SAH"= "darkred")) +
+  scale_fill_manual(values = c("HDC" = "darkolivegreen4", "AH" = "gold", "MAH" = "red", "SAH"= "darkred")) +
+  ylab("Peak") +
+  xlab("")+
+       theme(panel.spacing = unit(0,"line"))
+
+primary_secondary_box_stool_M_S <- ggplot(subset(df_metabol_box_stool.m, 
+            BIOCHEMICAL %in% names_sign_stool_BIOCHEMICAL & 
+              Class %in% c("MAH", "SAH")), 
+              aes(x=BIOCHEMICAL, y=value, fill = Class)) +
+  geom_boxplot() + 
+  #geom_point(size = 3, position = position_jitter(width = 0.1, 
+  #              height = 0), alpha = 0.5) +
+  facet_grid(~Grouping + Primary_Secondary, scales = "free_x", space = 'free',
+             labeller=labeller(Grouping = labels_Grouping, Primary_Secondary = labels_Primary))+
+  theme_bw() + scale_y_log10(labels = scales::math_format())+
+  theme(legend.position = "right",
+        axis.title = element_text(color="black", size=14),
+        axis.text = element_text(color="black", size=14),
+        legend.title = element_blank(),
+        legend.text=element_text(size=14),
+        strip.text = element_text(size=12),
+        axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1)) +
+  scale_color_manual(values = c("HDC" = "darkolivegreen4", "AH" = "gold", "MAH" ="red", "SAH"= "darkred")) +
+  scale_fill_manual(values = c("HDC" = "darkolivegreen4", "AH" = "gold", "MAH" ="red", "SAH"= "darkred")) +
+  ylab("Peak") +
+  xlab("")+
+       theme(panel.spacing = unit(0,"line"))
+
+```
+
+
+Kruskal-Wallis tests on all metabolites to identify which are significant
+
+```{r}
+#remove metabolites with all 1's from analysis. 
+metabol_names_stool2 <- metabol_names_stool[!apply(data_stool_all[, metabol_names_stool], 2, function(x) all(x == 1))]
+
+sign.metabol_stool.list <- sapply(metabol_names_stool2, function(x) NULL)
+kw.res <- c()
+for (i in 1:length(sign.metabol_stool.list)){
+  metabol <- names(sign.metabol_stool.list)[i]
+  fm <- as.formula(paste(metabol, "~ Class"))
+  dunn.res <- dunnTest(fm, data=data_stool_all[, c("Class", metabol)], method = "holm", kw=TRUE)
+  #kw.res <-  c(kw.res, as.numeric(sub(".*p-value = ", "", dunn.res$dtres[4]))) #from dunn test
+  #kruskal.test
+  kw.res <-  c(kw.res,kruskal.test(fm, data=data_stool_all[, c("Class", metabol)])$p.value)
+  sign.metabol_stool.list[[i]] <- dunn.res$res
+}
+
+#false discovery rates
+qobj <- qvalue(kw.res, fdr.level = 0.1)
+
+# get q-value object
+#plot(qobj)
+#hist(qobj)
+```
+
+
+
+```{r, display = 'FALSE'}
+kw.res_stool <- data.frame(metabol = names(sign.metabol_stool.list), KW.pvalue = kw.res,
+                     q.value = qobj$qvalues,
+                     q.value.sign = qobj$significant)
+kw.res_BA_stool <- merge(metabol_box_all_stool, kw.res_stool,
+                    by.x = "ID", by.y = "metabol")
+
+kable(kw.res_BA_stool[kw.res_BA_stool$KW.pvalue <0.05,c("ID", "BIOCHEMICAL",
+             "KW.pvalue", "q.value", "q.value.sign",
+            "Primary_Secondary", "Conj_Unconj", 
+            "Conj_type",   "Comp12_OH", "Comp_12-OH_Fig1_2",
+             "Dihydroxy_Trihydroxy" , "Comp_7-dehydroxy",
+            "Comp_7-dehydro_Fig_1_2", "Keto", "Epimer")], digits = 3)%>%
+  kable_styling(bootstrap_options = c("striped", "hover"), full_width = F)
+```
+
+## Primary and secondary bile acids in plasma
+
+
+```{r primary_secondary_box_all_plasma, fig.width = 12, fig.height = 8}
+
+metabol_box_all_plasma <- subset(metabol_plasma, rownames(metabol_plasma) %in% metabol_names_plasma_BA)
+metabol_box_all_plasma <- merge(metabol_box_all_plasma,  MetabolCompare_plasma,
+                        by = c("BIOCHEMICAL", "PATHWAY_SORTORDER"))
+#metabolites measurements
+df_metabol_box_plasma <- data_plasma_BA[,c("SUBJECT_ID","Class",metabol_names_plasma_BA)]
+#all AH
+tmp <- df_metabol_box_plasma[df_metabol_box_plasma$Class %in%  c("MAH", "SAH"), ]
+tmp$Class <- "AH"
+df_metabol_box_plasma <- rbind(df_metabol_box_plasma, tmp)
+df_metabol_box_plasma$Class <- factor(df_metabol_box_plasma$Class, 
+                               levels = c("HC", "HDC", "AH", "MAH", "SAH"))
+df_metabol_box_plasma.m <- melt(df_metabol_box_plasma, id.vars = c("SUBJECT_ID", "Class"))
+#merge groups of interest
+df_metabol_box_plasma.m <- merge(df_metabol_box_plasma.m, metabol_box_all_plasma,
+                          by.x = "variable", by.y = "ID")
+
+df_metabol_box_plasma.m$Primary_Secondary <- factor(df_metabol_box_plasma.m$Primary_Secondary,
+                                                   levels = c("P", "S", "O"))
+
+primary_secondary_box_all_plasma <- ggplot(df_metabol_box_plasma.m, 
+              aes(x=BIOCHEMICAL, y=value, fill = Class)) +
+  geom_boxplot() + 
+  #geom_point(size = 3, position = position_jitter(width = 0.1, 
+  #              height = 0), alpha = 0.5) +
+  facet_grid(~Primary_Secondary, scales = "free_x", space = 'free')+
+  theme_bw() + scale_y_log10(labels = scales::math_format())+
+  theme(legend.position = "bottom",
+        axis.title = element_text(color="black", size=10),
+        axis.text = element_text(color="black", size=10),
+        legend.title = element_blank(),
+        legend.text=element_text(size=8),
+        axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1)) +
+  scale_color_manual(values = c("green", "darkolivegreen4", "gold", "red", "darkred")) +
+  scale_fill_manual(values = c("green", "darkolivegreen4", "gold", "red", "darkred")) +
+  ylab("Peak") +
+  xlab("")
+
+primary_secondary_box_all_plasma
+
+```
+
+*Note: for the glycocholate sulfate, the healthy and heavy drinking controls have the identical imputed values. Therefore one group is removed from the test. Also, be careful when comparing t-test with control*
+
+
+```{r}
+library(rstatix)
+#remove glycocholate sulfate from tests
+
+df_metabol_box_plasma.m$log10_value <- log10(df_metabol_box_plasma.m$value)
+df_metabol_box_plasma.m.tmp <- subset(df_metabol_box_plasma.m, BIOCHEMICAL != "glycocholate sulfate")
+
+primary_secondary_plasma.test <- df_metabol_box_plasma.m.tmp %>%
+  group_by(BIOCHEMICAL) %>%
+  t_test(log10_value ~ Class)
+
+#add test on "glycocholate sulfate" for groups where is is possible
+tmp <- subset(df_metabol_box_plasma.m, BIOCHEMICAL == "glycocholate sulfate")
+#remove "N" group. It has identical values with the "H" group
+tmp <- subset(tmp, Class != "HC")
+
+tmp2<- tmp %>%
+  group_by(BIOCHEMICAL) %>%
+  t_test(log10_value ~ Class)
+
+primary_secondary_plasma.test <- rbind(primary_secondary_plasma.test, tmp2)
+###################################
+#create comparison id
+primary_secondary_plasma.test$comparison <- unite(primary_secondary_plasma.test[,c("group2", "group1")], comparison, sep = "_")$comparison
+
+primary_secondary_plasma.test <- subset(primary_secondary_plasma.test,
+                     comparison %in% c("HDC_HC", "AH_HDC", "SAH_MAH"))
+
+primary_secondary_plasma.test <- 
+  primary_secondary_plasma.test %>%
+  adjust_pvalue(method = "BH") %>%
+  add_significance()
+
+#adjust p-values with q-values and compare with KS-test
+#false discovery rates
+qobj <- qvalue(primary_secondary_plasma.test$p, fdr.level = 0.1)
+#plot(qobj)
+#hist(qobj)
+primary_secondary_plasma.test$q.value <- qobj$qvalues
+primary_secondary_plasma.test$q.value.sign <- qobj$significant
+
+
+```
+
+```{r}
+#add group means to t-tests data
+tmp.fold <- aggregate(log10_value ~ Class + BIOCHEMICAL, data = df_metabol_box_plasma.m, mean)
+plasma_test_AH <- subset(primary_secondary_plasma.test, group2 == "AH")
+
+#merge AH log10_mean
+plasma_test_AH <- merge(plasma_test_AH, subset(tmp.fold, Class == "AH")[,c("BIOCHEMICAL", "log10_value")],
+                        by = "BIOCHEMICAL")
+
+plasma_test_AH <- merge(plasma_test_AH, subset(tmp.fold, Class == "HDC")[,c("BIOCHEMICAL", "log10_value")],
+                        by = "BIOCHEMICAL", suffixes = c("_AH", "_HDC"))
+```
+
+```{r}
+#HDC versus HC
+plasma_test_HC <- subset(primary_secondary_plasma.test, group1 == "HC")
+
+#merge AH log10_mean
+plasma_test_HC <- merge(plasma_test_HC, subset(tmp.fold, Class == "HC")[,c("BIOCHEMICAL", "log10_value")],
+                        by = "BIOCHEMICAL")
+
+plasma_test_HC <- merge(plasma_test_HC, subset(tmp.fold, Class == "HDC")[,c("BIOCHEMICAL", "log10_value")],
+                        by = "BIOCHEMICAL", suffixes = c("_HC", "_HDC"))
+```
+
+
+```{r}
+#Moderate versus severe AH
+plasma_test_MAH <- subset(primary_secondary_plasma.test, group1 == "MAH")
+
+#merge AH log10_mean
+plasma_test_MAH <- merge(plasma_test_MAH, subset(tmp.fold, Class == "MAH")[,c("BIOCHEMICAL", "log10_value")],
+                        by = "BIOCHEMICAL")
+
+plasma_test_MAH <- merge(plasma_test_MAH, subset(tmp.fold, Class == "SAH")[,c("BIOCHEMICAL", "log10_value")],
+                        by = "BIOCHEMICAL", suffixes = c("_MAH", "_SAH"))
+```
+
+```{r}
+#merge stool and plasma means
+tmp.fold <- aggregate(value ~ Class + BIOCHEMICAL, data = df_metabol_box_plasma.m, mean)
+#plasma_test_AH, stool_test_AH
+plasma_test_AH$AH_HDC_diff <- plasma_test_AH$log10_value_AH - plasma_test_AH$log10_value_HDC
+plasma_test_HC$HDC_HC_diff <- plasma_test_HC$log10_value_HDC - plasma_test_HC$log10_value_HC
+plasma_test_MAH$SAH_MAH_diff <- plasma_test_MAH$log10_value_SAH - plasma_test_MAH$log10_value_MAH
+#stool differences
+stool_test_AH$AH_HDC_diff <- stool_test_AH$log10_value_AH - stool_test_AH$log10_value_HDC
+stool_test_MAH$SAH_MAH_diff <- stool_test_MAH$log10_value_SAH - stool_test_MAH$log10_value_MAH
+
+test_AH <- merge(plasma_test_AH[, c("BIOCHEMICAL",   "log10_value_HDC", "log10_value_AH", "AH_HDC_diff",
+                         "p.adj", "p.adj.signif")],
+      stool_test_AH[, c("BIOCHEMICAL",   "log10_value_HDC", "log10_value_AH", "AH_HDC_diff",
+                         "p.adj", "p.adj.signif")],
+      by = "BIOCHEMICAL", suffixes = c("_plasma", "_stool"),
+      all = TRUE)
+#merge in HDC
+test_AH <- merge(plasma_test_HC[, c("BIOCHEMICAL",   "log10_value_HC",  "log10_value_HDC", "HDC_HC_diff",
+                         "p.adj", "p.adj.signif")],
+                 test_AH,
+                 by = c("BIOCHEMICAL"), suffixes = c("_HC", "_AH"),
+      all = TRUE)
+
+write.csv(test_AH, here::here("Data", "Mark_BileAcids_AH.csv"))
+
+test_MAH <- merge(plasma_test_MAH[, c("BIOCHEMICAL",   "log10_value_SAH", "log10_value_MAH", "SAH_MAH_diff",
+                         "p.adj", "p.adj.signif")],
+      stool_test_MAH[, c("BIOCHEMICAL",   "log10_value_SAH", "log10_value_MAH", "SAH_MAH_diff",
+                         "p.adj", "p.adj.signif")],
+      by = "BIOCHEMICAL", suffixes = c("_plasma", "_stool"),
+      all = TRUE)
+
+write.csv(test_MAH, here::here("Data", "Mark_BileAcids_MAH.csv"))
+```
+
+
+```{r}
+#glycodeoxycholate -- see why fold change >1 while difference is <1 (i.e., )
+res.fold_plasma <- data.frame(HDC_HC = integer(),
+                              AH_HDC=integer(),
+                              SAH_MAH = integer())
+
+#calculate foldchange (ratio of the means) for each group
+for (i in 1:length(unique(tmp.fold$BIOCHEMICAL))){
+  metabol <- unique(tmp.fold$BIOCHEMICAL)[i]
+  
+  #ratio of H_N
+  tmp_num <- subset(tmp.fold, BIOCHEMICAL == metabol & Class == "HDC")
+  tmp_den <- subset(tmp.fold, BIOCHEMICAL == metabol & Class == "HC")
+  res.fold_plasma[i,"HDC_HC"] <- tmp_num$value/tmp_den$value
+  #ratio of AH/H
+  tmp_num <- subset(tmp.fold, BIOCHEMICAL == metabol & Class == "AH")
+  tmp_den <- subset(tmp.fold, BIOCHEMICAL == metabol & Class == "HDC")
+  res.fold_plasma[i,"AH_HDC"] <- tmp_num$value/tmp_den$value
+  
+  #ratio of S/M
+  tmp_num <- subset(tmp.fold, BIOCHEMICAL == metabol & Class == "SAH")
+  tmp_den <- subset(tmp.fold, BIOCHEMICAL == metabol & Class == "MAH")
+  res.fold_plasma[i,"SAH_MAH"] <- tmp_num$value/tmp_den$value
+  
+  
+}
+#add metabolite name
+res.fold_plasma$BIOCHEMICAL <- unique(tmp.fold$BIOCHEMICAL)
+res.fold_plasma.m <- melt(res.fold_plasma, id.vars = "BIOCHEMICAL")
+colnames(res.fold_plasma.m)[which(colnames(res.fold_plasma.m) == "variable")] <- "comparison"
+colnames(res.fold_plasma.m)[which(colnames(res.fold_plasma.m) == "value")] <- "FoldChange"
+
+#merge with p-value tests
+primary_secondary_plasma.test <- merge(primary_secondary_plasma.test,
+                                       res.fold_plasma.m,
+                                       by = c("comparison", "BIOCHEMICAL"))
+primary_secondary_plasma.test$log2FoldChange <- log2(primary_secondary_plasma.test$FoldChange)
+#create up and down columns
+primary_secondary_plasma.test$diffexpressed <- "NO"
+# if log2Foldchange > 0.6 and pvalue < 0.1, set as "UP" 
+primary_secondary_plasma.test$diffexpressed[primary_secondary_plasma.test$log2FoldChange > 0.6 & primary_secondary_plasma.test$p.adj < 0.1] <- "UP"
+# if log2Foldchange < -0.6 and pvalue < 0.05, set as "DOWN"
+primary_secondary_plasma.test$diffexpressed[primary_secondary_plasma.test$log2FoldChange < -0.6 & primary_secondary_plasma.test$p.adj < 0.1] <- "DOWN"
+
+```
+
+
+Plot only those metabolites that had at least one comparison with  a significant q-value.
+
+```{r}
+names_sign_plasma_BIOCHEMICAL <- unique(primary_secondary_plasma.test$BIOCHEMICAL[
+                  primary_secondary_plasma.test$q.value.sign == TRUE])
+
+kable(subset(primary_secondary_plasma.test, BIOCHEMICAL %in% names_sign_plasma_BIOCHEMICAL), digits =3)%>%
+  kable_styling(bootstrap_options = c("striped", "hover"), full_width = F)
+
+```
+
+
+
+```{r primary_secondary_box_plasma}
+
+primary_secondary_box_plasma_N_H <- ggplot(subset(df_metabol_box_plasma.m, 
+                          BIOCHEMICAL %in% names_sign_plasma_BIOCHEMICAL &
+                            Class %in% c("HC", "HDC")), 
+              aes(x=BIOCHEMICAL, y=value, fill = Class)) +
+  geom_boxplot() + 
+  #geom_point(size = 3, position = position_jitter(width = 0.1, 
+  #              height = 0), alpha = 0.5) +
+  facet_grid(~Grouping + Primary_Secondary, scales = "free_x", space = 'free',
+             labeller=labeller(Grouping = labels_Grouping, Primary_Secondary = labels_Primary))+
+  theme_bw() + scale_y_log10(labels = scales::math_format())+
+  theme(legend.position = "right",
+        axis.title = element_text(color="black", size=12),
+        axis.text = element_text(color="black", size=12),
+        legend.title = element_blank(),
+        legend.text=element_text(size=10),
+        axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1)) +
+  scale_color_manual(values = c("HC" = "green", "HDC"= "darkolivegreen4", "AH"= "gold", "MAH"="red","SAH"= "darkred")) +
+  scale_fill_manual(values = c("HC" = "green", "HDC"= "darkolivegreen4", "AH"= "gold", "MAH"="red","SAH"= "darkred")) +
+  ylab("Peak") +
+  xlab("")+
+       theme(panel.spacing = unit(0,"line"))
+
+primary_secondary_box_plasma_H_AH <- ggplot(subset(df_metabol_box_plasma.m, 
+                          BIOCHEMICAL %in% names_sign_plasma_BIOCHEMICAL &
+                            Class %in% c("HDC", "AH")), 
+              aes(x=BIOCHEMICAL, y=value, fill = Class)) +
+  geom_boxplot() + 
+  #geom_point(size = 3, position = position_jitter(width = 0.1, 
+  #              height = 0), alpha = 0.5) +
+  facet_grid(~Grouping + Primary_Secondary, scales = "free_x", space = 'free',
+             labeller=labeller(Grouping = labels_Grouping, Primary_Secondary = labels_Primary))+
+  theme_bw() + scale_y_log10(labels = scales::math_format())+
+  theme(legend.position = "right",
+        axis.title = element_text(color="black", size=12),
+        axis.text = element_text(color="black", size=12),
+        legend.title = element_blank(),
+        legend.text=element_text(size=10),
+        axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1)) +
+  scale_color_manual(values = c("HC" = "green", "HDC"= "darkolivegreen4", "AH"= "gold", "MAH"="red","SAH"= "darkred")) +
+  scale_fill_manual(values = c("HC" = "green", "HDC"= "darkolivegreen4", "AH"= "gold", "MAH"="red","SAH"= "darkred")) +
+  ylab("Peak") +
+  xlab("")+
+       theme(panel.spacing = unit(0,"line"))
+
+primary_secondary_box_plasma_M_S <- ggplot(subset(df_metabol_box_plasma.m, 
+                          BIOCHEMICAL %in% names_sign_plasma_BIOCHEMICAL &
+                            Class %in% c("MAH", "SAH")), 
+              aes(x=BIOCHEMICAL, y=value, fill = Class)) +
+  geom_boxplot() + 
+  #geom_point(size = 3, position = position_jitter(width = 0.1, 
+  #              height = 0), alpha = 0.5) +
+  facet_grid(~Grouping + Primary_Secondary, scales = "free_x", space = 'free',
+             labeller=labeller(Grouping = labels_Grouping, Primary_Secondary = labels_Primary))+
+  theme_bw() + scale_y_log10(labels = scales::math_format())+
+  theme(legend.position = "right",
+        axis.title = element_text(color="black", size=14),
+        axis.text = element_text(color="black", size=14),
+        legend.title = element_blank(),
+        legend.text=element_text(size=14),
+        strip.text = element_text(size=12),
+        axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1)) +
+  scale_color_manual(values = c("HC" = "green", "HDC"= "darkolivegreen4", "AH"= "gold", "MAH"="red","SAH"= "darkred")) +
+  scale_fill_manual(values = c("HC" = "green", "HDC"= "darkolivegreen4", "AH"= "gold", "MAH"="red","SAH"= "darkred")) +
+  ylab("Peak") +
+  xlab("")+
+       theme(panel.spacing = unit(0,"line"))
+```
+
+
+
+
+
+
+# Correlation of significant BA with taxa
+
+```{r}
+
+BA_sign <- subset(df_metabol_box_stool.m, 
+                   BIOCHEMICAL %in% names_sign_stool_BIOCHEMICAL)
+
+data_stool_BA_taxa_common <- data_stool_BA_taxa_common %>% 
+  rename("Group" = "Class")
+
+BA_taxa_common <- data_stool_BA_taxa_common[,c(as.character(unique(BA_sign$variable)),
+                                               "Class", "SUBJECT_ID")]
+
+BA_taxa_common <- merge(BA_taxa_common, 
+                stool_taxa_common[,c("stool_taxa_id_mapping", "stool_id", "taxa_id")],
+                        by.x = "SUBJECT_ID", by.y = "stool_id")
+
+taxa <- t(as(otu_table(physeq), "matrix"))
+taxa_names <- colnames(taxa)
+samples <- as(sample_data(physeq), "data.frame")
+taxa_common <- data.frame(taxa, samples[, c("VCU_ID", "Class")])
+taxa_common <- merge(taxa_common, 
+                stool_taxa_common[,c("stool_taxa_id_mapping", "stool_id", "taxa_id")],
+                        by.x = "VCU_ID", by.y = "taxa_id")
+
+#arrange samples in the same order
+taxa_common <- taxa_common[match(BA_taxa_common$stool_taxa_id_mapping, taxa_common$stool_taxa_id_mapping),]
+
+```
+
+## HDC and AH correlations 
+
+```{r}
+BA_mtx <- subset(BA_taxa_common, Class %in% c("HDC"))
+BA_mtx <- BA_mtx[,as.character(unique(BA_sign$variable))]
+
+taxa_mtx <- subset(taxa_common, Class %in% c("HDC"))
+taxa_mtx <-taxa_mtx[,!colnames(taxa_mtx) %in% c("VCU_ID", "Class", "stool_taxa_id_mapping", "stool_id")]
+
+X <- cbind(taxa_mtx, BA_mtx)
+cor.mat <- cor(X)
+#take taxa and bile acods correlations
+cor.mat <- cor.mat[rownames(cor.mat) %in% colnames(taxa_mtx), colnames(cor.mat) %in% colnames(BA_mtx)]
+#remove NAs
+BA_na <- apply(cor.mat, MARGIN = 2, FUN = function(x) all(is.na(x))) #no variability for these in HDC
+cor.mat <- cor.mat[,!BA_na]
+
+taxa_na <- apply(cor.mat, MARGIN = 1, FUN = function(x) all(is.na(x)))
+cor.mat <- cor.mat[!taxa_na,]
+
+#zero correlations below 0.3
+cor.mat[abs(cor.mat) < 0.4] <- 0
+cor.mat.m <- melt(cor.mat, value.name = "Correlation",
+    varnames = c("Taxa", "BA"))
+
+taxa_table <- as(tax_table(physeq), "matrix")
+
+cor.mat.m <- merge(cor.mat.m, taxa_table, by.x = "Taxa", by.y = "row.names",
+                    all.x = TRUE)
+cor.mat.m <-cor.mat.m[cor.mat.m$Correlation !=0,]
+
+BA_id <- df_metabol_box_stool.m[,c("variable", "BIOCHEMICAL")]
+BA_id <- BA_id[!duplicated(BA_id),]
+
+cor.mat.m <- merge(cor.mat.m, BA_id, by.x = "BA", by.y = "variable",
+                    all.x = TRUE)
+cor.mat.m$Class <- "HDC"
+
+#create color breaks
+#breaks <- c(-1, -0.7, -0.4,  0.4, 0.7, 1)
+#cor.mat.m$cut <- cut(cor.mat.m$Correlation, breaks, right=TRUE,include.lowest = TRUE)
+#cor.mat.m$cat <- revalue(cor.mat.m$cut,
+#                                c("[-1,-0.7]" = "HDC:[-1,-0.7]",
+#                               "(-0.7,-0.4]" = "HDC:(-0.7,-0.4])",
+#                               "(-0.4,0.4]" = "HDC:(-0.4,0.4]",
+#                                "(0.4,0.7]" = "HDC:(0.4,0.7]",
+#                               "(0.7,1]" = "HDC:(0.7,1]"
+#                                ))
+cor.mat.m.comb <- cor.mat.m
+```
+
+```{r}
+BA_mtx <- subset(BA_taxa_common, Class %in% c("MAH", "SAH"))
+BA_mtx <- BA_mtx[,as.character(unique(BA_sign$variable))]
+
+taxa_mtx <- subset(taxa_common, Class %in% c("MAH", "SAH"))
+taxa_mtx <-taxa_mtx[,!colnames(taxa_mtx) %in% c("VCU_ID", "Class", "stool_taxa_id_mapping", "stool_id")]
+
+X <- cbind(taxa_mtx, BA_mtx)
+cor.mat <- cor(X)
+#take taxa and bile acids correlations
+cor.mat <- cor.mat[rownames(cor.mat) %in% colnames(taxa_mtx), colnames(cor.mat) %in% colnames(BA_mtx)]
+#remove NAs
+BA_na <- apply(cor.mat, MARGIN = 2, FUN = function(x) all(is.na(x))) #no variability for these in HDC
+cor.mat <- cor.mat[,!BA_na]
+
+taxa_na <- apply(cor.mat, MARGIN = 1, FUN = function(x) all(is.na(x)))
+cor.mat <- cor.mat[!taxa_na,]
+
+#zero correlations below 0.3
+cor.mat[abs(cor.mat) < 0.4] <- 0
+cor.mat.m <- melt(cor.mat, value.name = "Correlation",
+    varnames = c("Taxa", "BA"))
+cor.mat.m <- cor.mat.m[cor.mat.m$Correlation !=0,]
+  
+taxa_table <- as(tax_table(physeq), "matrix")
+
+cor.mat.m <- merge(cor.mat.m, taxa_table, by.x = "Taxa", by.y = "row.names",
+                    all.x = TRUE)
+
+BA_id <- df_metabol_box_stool.m[,c("variable", "BIOCHEMICAL")]
+BA_id <- BA_id[!duplicated(BA_id),]
+
+cor.mat.m <- merge(cor.mat.m, BA_id, by.x = "BA", by.y = "variable",
+                    all.x = TRUE)
+cor.mat.m$Class <- "AH"
+#breaks <- c(-1, -0.7, -0.4,  0.4, 0.7, 1)
+#cor.mat.m$cut <- cut(cor.mat.m$Correlation, breaks, right=TRUE,include.lowest = TRUE)
+#cor.mat.m$cat <- revalue(cor.mat.m$cut,
+#                                c("[-1,-0.7]" = "AH:[-1,-0.7]",
+#                               "(-0.7,-0.4]" = "AH:(-0.7,-0.4])",
+#                               "(-0.4,0.4]" = "AH:(-0.4,0.4]",
+#                                "(0.4,0.7]" = "AH:(0.4,0.7]",
+#                               "(0.7,1]" = "AH:(0.7,1]"
+ #                               ))
+cor.mat.m.comb <- rbind(cor.mat.m.comb, cor.mat.m)
+#merge primary -secondary info
+tmp <- BA_sign[, c("BIOCHEMICAL", "Primary_Secondary")]
+tmp <- tmp[!duplicated(tmp),]
+cor.mat.m.comb <- merge(cor.mat.m.comb, tmp, by = "BIOCHEMICAL")
+cor.mat.m.comb$Class <- factor(cor.mat.m.comb$Class, levels = c("HDC", "AH"))
+cor.mat.m.comb <- cor.mat.m.comb[!is.na(cor.mat.m.comb$Genus),]
+cor.mat.m.comb_HDC <- subset(cor.mat.m.comb, Primary_Secondary %in% c("P", "S"))
+```
+
+
+```{r p_cor_HDC, fig.width = 20, fig.height=8}
+
+CorBileAcidTaxa_HDC <- ggplot(data = cor.mat.m.comb_HDC, 
+                    aes(x=Genus, y=BIOCHEMICAL, fill=Correlation)) + 
+  geom_tile(color = "white")+
+  scale_fill_gradient2(low = "blue", high = "red", mid = "white", 
+                       midpoint = 0, limit = c(-1,1), space = "Lab", 
+                       name="Correlation")+
+  facet_grid(Class + Primary_Secondary ~ Family, space = 'free', scales = 'free',
+                   labeller = label_wrap_gen(width=2), 
+             #labeller=labeller( Primary_Secondary = labels_Primary),
+             switch= "y")+#use , switch = 'x' to lay panel below
+  theme_bw()+
+  theme(strip.text = element_text(size=18),
+              strip.text.x = element_text(angle = 90),
+              strip.background.x = element_rect(fill="gray78"),
+         legend.position="right",
+         legend.text=element_text(size=18),
+         legend.title = element_text(size=18),
+        axis.title.x=element_blank(),
+        axis.title.y=element_blank(),
+        axis.text.x = element_text(angle = 90,  size = 18, hjust=1, vjust=0.2),
+        axis.text.y = element_text( size = 18))+
+       theme(panel.spacing = unit(0,"line"))
+  
+CorBileAcidTaxa_HDC
+```
+
+```{r}
+
+#delete some connections
+cor.mat.m <- subset(cor.mat.m, Correlation >=0.7)
+#cytoscapePing()
+
+g <- graph_from_data_frame(cor.mat.m[,c("BIOCHEMICAL", "Genus", "Correlation")], directed = FALSE)
+#createNetworkFromIgraph(g)
+```
+
+
+## MAH and SAH correlations 
+
+```{r p_cor_MAH, fig.width = 20, fig.height=8}
+BA_mtx <- subset(BA_taxa_common, Class %in% c("MAH"))
+BA_mtx <- BA_mtx[,as.character(unique(BA_sign$variable))]
+
+taxa_mtx <- subset(taxa_common, Class %in% c("MAH"))
+taxa_mtx <-taxa_mtx[,!colnames(taxa_mtx) %in% c("VCU_ID", "Class", "stool_taxa_id_mapping", "stool_id")]
+
+X <- cbind(taxa_mtx, BA_mtx)
+cor.mat <- cor(X)
+#take taxa and bile acids correlations
+cor.mat <- cor.mat[rownames(cor.mat) %in% colnames(taxa_mtx), colnames(cor.mat) %in% colnames(BA_mtx)]
+#remove NAs
+BA_na <- apply(cor.mat, MARGIN = 2, FUN = function(x) all(is.na(x))) #no variability for these in HDC
+cor.mat <- cor.mat[,!BA_na]
+
+taxa_na <- apply(cor.mat, MARGIN = 1, FUN = function(x) all(is.na(x)))
+cor.mat <- cor.mat[!taxa_na,]
+
+#zero correlations below 0.3
+cor.mat[abs(cor.mat) < 0.4] <- 0
+cor.mat.m <- melt(cor.mat, value.name = "Correlation",
+    varnames = c("Taxa", "BA"))
+cor.mat.m <-cor.mat.m[cor.mat.m$Correlation !=0,]
+  
+taxa_table <- as(tax_table(physeq), "matrix")
+
+cor.mat.m <- merge(cor.mat.m, taxa_table, by.x = "Taxa", by.y = "row.names",
+                    all.x = TRUE)
+
+BA_id <- df_metabol_box_stool.m[,c("variable", "BIOCHEMICAL")]
+BA_id <- BA_id[!duplicated(BA_id),]
+
+cor.mat.m <- merge(cor.mat.m, BA_id, by.x = "BA", by.y = "variable",
+                    all.x = TRUE)
+
+cor.mat.m$Class <- "MAH"
+cor.mat.m.comb <- cor.mat.m
+```
+
+SAH correlations 
+
+```{r }
+BA_mtx <- subset(BA_taxa_common, Class %in% c("SAH"))
+BA_mtx <- BA_mtx[,as.character(unique(BA_sign$variable))]
+
+taxa_mtx <- subset(taxa_common, Class %in% c("SAH"))
+taxa_mtx <-taxa_mtx[,!colnames(taxa_mtx) %in% c("VCU_ID", "Class", "stool_taxa_id_mapping", "stool_id")]
+
+X <- cbind(taxa_mtx, BA_mtx)
+cor.mat <- cor(X)
+#take taxa and bile acids correlations
+cor.mat <- cor.mat[rownames(cor.mat) %in% colnames(taxa_mtx), colnames(cor.mat) %in% colnames(BA_mtx)]
+#remove NAs
+BA_na <- apply(cor.mat, MARGIN = 2, FUN = function(x) all(is.na(x))) #no variability for these in HDC
+cor.mat <- cor.mat[,!BA_na]
+
+taxa_na <- apply(cor.mat, MARGIN = 1, FUN = function(x) all(is.na(x)))
+cor.mat <- cor.mat[!taxa_na,]
+
+#zero correlations below 0.3
+cor.mat[abs(cor.mat) < 0.3] <- 0
+cor.mat.m <- melt(cor.mat, value.name = "Correlation",
+    varnames = c("Taxa", "BA"))
+cor.mat.m <-cor.mat.m[cor.mat.m$Correlation !=0,]
+  
+taxa_table <- as(tax_table(physeq), "matrix")
+
+cor.mat.m <- merge(cor.mat.m, taxa_table, by.x = "Taxa", by.y = "row.names",
+                    all.x = TRUE)
+
+BA_id <- df_metabol_box_stool.m[,c("variable", "BIOCHEMICAL")]
+BA_id <- BA_id[!duplicated(BA_id),]
+
+cor.mat.m <- merge(cor.mat.m, BA_id, by.x = "BA", by.y = "variable",
+                    all.x = TRUE)
+cor.mat.m$Class <- "SAH"
+cor.mat.m.comb <- rbind(cor.mat.m.comb, cor.mat.m)
+
+tmp <- BA_sign[, c("BIOCHEMICAL", "Primary_Secondary")]
+tmp <- tmp[!duplicated(tmp),]
+cor.mat.m.comb <- merge(cor.mat.m.comb, tmp, by = "BIOCHEMICAL")
+cor.mat.m.comb$Class <- factor(cor.mat.m.comb$Class, levels = c("MAH", "SAH"))
+cor.mat.m.comb <- cor.mat.m.comb[!is.na(cor.mat.m.comb$Genus),]
+cor.mat.m.comb_SAH <- subset(cor.mat.m.comb, Primary_Secondary %in% c("P", "S"))
+```
+
+```{r p_cor_SAH, fig.width = 20, fig.height=8}
+CorBileAcidTaxa_SAH <- ggplot(data = cor.mat.m.comb_SAH, 
+                      aes(x=Genus, y=BIOCHEMICAL, fill=Correlation)) + 
+  geom_tile(color = "white")+
+  scale_fill_gradient2(low = "blue", high = "red", mid = "white", 
+                       midpoint = 0, limit = c(-1,1), space = "Lab", 
+                       name="Correlation")+
+  facet_grid(Class + Primary_Secondary~ Family, space = 'free', scales = 'free',
+                   labeller = label_wrap_gen(width=2),
+             #labeller=labeller( Primary_Secondary = labels_Primary),
+             switch = 'y')+#use , switch = 'x' to lay panel below
+  theme_bw()+
+  theme(strip.text = element_text(size=18),
+              strip.text.x = element_text(angle = 90),
+              strip.background.x = element_rect(fill="gray78"),
+         legend.position="right",
+         legend.text=element_text(size=18),
+         legend.title = element_text(size=18),
+        axis.title.x=element_blank(),
+        axis.title.y=element_blank(),
+        axis.text.x = element_text(angle = 90,  size = 18, hjust=1, vjust=0.2),
+        axis.text.y = element_text( size = 18))+
+       theme(panel.spacing = unit(0,"line"))
+
+CorBileAcidTaxa_SAH
+```
+
+
+
+```{r p_cor_BA_taxa, fig.width = 30, fig.height=20}
+
+cor.mat.m.comb <- rbind(cor.mat.m.comb_HDC, cor.mat.m.comb_SAH)
+
+CorBileAcidTaxa <- ggplot(data = cor.mat.m.comb, 
+                      aes(x=Genus, y=BIOCHEMICAL, fill=Correlation)) + 
+  geom_tile(color = "white")+
+  scale_fill_gradient2(low = "blue", high = "red", mid = "white", 
+                       midpoint = 0, limit = c(-1,1), space = "Lab", 
+                       name="Correlation")+
+  facet_grid(Class + Primary_Secondary~ Family, space = 'free', scales = 'free',
+                   #labeller = label_wrap_gen(width=2),
+             labeller=labeller( Primary_Secondary = labels_Primary),
+             switch = 'y')+#use , switch = 'x' to lay panel below
+  theme_bw()+
+  theme(strip.text = element_text(size=18),
+              strip.text.x = element_text(angle = 90),
+              strip.background.x = element_rect(fill="gray78"),
+         legend.position="right",
+         legend.text=element_text(size=18),
+         legend.title = element_text(size=18),
+        axis.title.x=element_blank(),
+        axis.title.y=element_blank(),
+        axis.text.x = element_text(angle = 90,  size = 18, hjust=1, vjust=0.2),
+        axis.text.y = element_text( size = 18))+
+       theme(panel.spacing = unit(0,"line"))
+
+CorBileAcidTaxa
+```
+
+
+# Taxa sensitive and resistant to bile acids
+
+```{r}
+senst_resist_taxa <- "BileAcid_SensitiveResistant_Links.xlsx"
+senst_resist_taxa <- read_excel(here::here("Data", 
+                                 senst_resist_taxa), sheet ="Sheet1")
+#remove all na row
+senst_resist_taxa <- senst_resist_taxa[!is.na(senst_resist_taxa$`Resistance to BA`),]
+#merge taxa ids
+taxa_names <- data.frame(as(tax_table(physeq), "matrix"))
+taxa_names$tax_id <- rownames(taxa_names)
+senst_resist_taxa <- merge(senst_resist_taxa, taxa_names, by = c("Family", "Genus"),
+                           all.x = TRUE)
+#add Enterobacteriaceae at family level
+tmp <- subset(taxa_names, Family %in% senst_resist_taxa$Family[is.na(senst_resist_taxa$Genus)])
+#select those taxa and aggregate on family level
+taxa <- t(as(otu_table(physeq), "matrix"))
+tmp2 <- taxa[,rownames(tmp)]
+tmp2 <- data.frame(apply(tmp2, 1, sum))
+names(tmp2)<- tmp[1,"tax_id"]
+rm(tmp)
+#take only those with either no change or with expression
+senst_resist_taxa <- subset(senst_resist_taxa, Change != "NA")
+senst_resist_taxa$Change <- revalue(senst_resist_taxa$Change, 
+                                    c("NC"="No change", "HDC"="Increased in HDC"))
+
+#subset to taxa for plot at genus level
+taxa_sens_resist <- taxa[,unique(senst_resist_taxa$tax_id[!is.na(senst_resist_taxa$Genus)])]
+
+
+#add family level taxa
+taxa_sens_resist <- cbind(taxa_sens_resist, tmp2)
+#add Enterobacteriaceae identified at genus level
+samples <- as(sample_data(physeq), "data.frame")
+taxa_sens_resist <- data.frame(taxa_sens_resist, samples[, c("VCU_ID", "Class")])
+#aggregate for each group
+taxa_sens_resist$Class <- ifelse(taxa_sens_resist$Class == "HDC", "HDC", "AH")
+taxa_sens_resist.m <- melt(taxa_sens_resist, id.vars = c("VCU_ID", "Class"))
+taxa_sens_resist.m$Class <- factor(taxa_sens_resist.m$Class, levels = c("HDC", "AH"))
+taxa_sens_resist <- aggregate(value ~ variable + Class,taxa_sens_resist.m, mean)
+#merge taxa names
+taxa_sens_resist <- merge(taxa_sens_resist, senst_resist_taxa,
+                          by.x = "variable", by.y = "tax_id",
+                          suffixes = c("", "_tax"),
+                          all.x = TRUE)
+
+taxa_sens_resist.m <- merge(taxa_sens_resist.m, senst_resist_taxa,
+                          by.x = "variable", by.y = "tax_id",
+                          suffixes = c("", "_tax"),
+                          all.x = TRUE)
+  
+```
+
+
+```{r p_box_sens_resist}
+
+p_box_sens_resist <- ggplot(subset(taxa_sens_resist.m, 
+                                   taxa_sens_resist.m$Change == "Increased in HDC"), 
+              aes(x=Class, y=value, fill = Class)) +
+  geom_boxplot() + 
+  facet_grid( ~ Family + Genus, scales = "free_x", space = 'free')+
+  #geom_point(size = 3, position = position_jitter(width = 0.1, 
+  #              height = 0), alpha = 0.5) +
+  theme_bw() +
+  theme(legend.position = "right",
+        axis.title = element_text(color="black", size=10),
+        axis.text = element_text(color="black", size=10),
+        legend.title = element_blank(),
+        legend.text=element_text(size=8),
+        axis.text.x = element_text(angle = 0, vjust = 0.5, hjust=1)) +
+  scale_color_manual(values = c("darkolivegreen4",  "gold")) +
+  scale_fill_manual(values = c("darkolivegreen4",  "gold")) +
+  ylab("Relative abundance") +
+  xlab("")+
+       theme(panel.spacing = unit(0,"line"))
+p_box_sens_resist
+```
+
+Taxa  linked to bile acids
+
+```{r}
+BA_taxa_link_file <- "Recoded_bileacid_taxa_link_combined.xlsx"
+BA_taxa_link1 <- read_excel(here::here("Data", 
+                                 BA_taxa_link_file), sheet ="Sheet2")
+
+BA_taxa_link <- read_excel(here::here("Data", 
+                                 BA_taxa_link_file), sheet ="Sheet3")
+
+taxa_names$Genus[taxa_names$tax_id == "Actinobacteria_Actinobacteria_Coriobacteriales_Coriobacteriaceae_unknown_Gordonibacter"] <- "unknown_Gordonibacter" 
+
+taxa_names$Genus[taxa_names$tax_id == "Firmicutes_Clostridia_Clostridiales_Lachnospiraceae_Clostridium XlVa"] <- "ClostridiumXlVa" 
+
+BA_taxa_link <- merge(BA_taxa_link, taxa_names, by = c("Family", "Genus"),
+                           all.x = TRUE)
+#select taxa for heatmap
+taxa_BA_link <- taxa[,BA_taxa_link$tax_id]
+taxa_BA_link <- data.frame(taxa_BA_link, samples[, c("VCU_ID", "Class")])
+taxa_BA_link$Class <- ifelse(taxa_BA_link$Class == "HDC", "HDC", "AH")
+taxa_BA_link.m <- melt(taxa_BA_link, id.vars = c("VCU_ID", "Class"))
+taxa_BA_link.m$Class <- factor(taxa_BA_link.m$Class, levels = c("HDC", "AH"))
+
+taxa_BA_link <- aggregate(value ~ variable + Class,taxa_BA_link.m, mean)
+
+taxa_BA_link$variable <- revalue(taxa_BA_link$variable, 
+            c("Firmicutes_Clostridia_Clostridiales_Lachnospiraceae_unknown_Clostridium.XlVa"= 
+                "Firmicutes_Clostridia_Clostridiales_Lachnospiraceae_unknown_Clostridium XlVa"))
+
+#merge taxa names
+taxa_BA_link <- merge(taxa_BA_link, BA_taxa_link,
+                          by.x = "variable", by.y = "tax_id",
+                          suffixes = c("", "_tax"),
+                          all.x = TRUE)
+
+
+```
+
+
+```{r p_taxa_BA_link}
+
+taxa_BA_link$Fam_gen <- do.call(paste, c(taxa_BA_link[, c("Family", "Genus")], sep="_")) 
+
+p_list<- list()
+for (i in 1:length(unique(taxa_BA_link$Fam_gen))){
+  gen <- unique(taxa_BA_link$Fam_gen)[i]
+p_list[[i]] <- ggplot(data=subset(taxa_BA_link, Fam_gen == gen), 
+       aes(x=Class, y=value, fill=Class)) +
+  geom_bar(stat="identity", position = "dodge")+
+  scale_fill_manual(values=c("darkolivegreen4",  "gold"))+
+  facet_grid(. ~ X7_deOH	+ X3alpha_3beta	+ X7alpha_7beta, 
+             space = 'free_x', scales = 'free_x', switch = 'x')+
+  ggtitle(gen)+
+  theme_bw()+ ylab("Proportion") +xlab("")+
+  theme(strip.text = element_text(size=12),
+        legend.title=element_blank(), legend.position="bottom",
+        legend.text = element_text(size=10),
+        axis.title.x=element_blank(),
+        axis.title.y=element_text(size=12),
+        axis.text.y  = element_text( size=12),
+        axis.text.x = element_text( size = 12))+# remove facet spacing on x-direction
+  theme(panel.spacing.x = unit(0,"line")) +
+  # switch the facet strip label to outside 
+  # remove background color
+  theme(strip.background.x = element_rect(fill="gray78"),
+        strip.text.x = element_text(size = 12))
+}
+
+p_taxa_BA_link <- grid.arrange(p_list[[1]], p_list[[2]],
+                               p_list[[3]], p_list[[4]],
+                               ncol = 2, nrow = 2)
+```
+
+
+# Conjugation group heatmaps
+
+## Stool total primary and total secondary heatmaps
+
+```{r primary_secondary_rel_stool}
+###########################
+#Class 1 for heat heatmap
+###########################
+df_metabol_box_stool.m.tot <- subset(df_metabol_box_stool.m, Primary_Secondary %in% c("P", "S"))
+tmp <- aggregate(value ~ BIOCHEMICAL + Class + Primary_Secondary,df_metabol_box_stool.m.tot, mean)
+#subset to just primary and secondary
+#total primary and total secondary
+totals <- aggregate(value ~  Class,df_metabol_box_stool.m.tot , sum)
+total.conj <- aggregate(value ~  Class + Primary_Secondary,df_metabol_box_stool.m.tot , sum)
+
+tmp.total <- merge(total.conj, totals, 
+                   by = "Class", suffixes = c("", "_total"))
+
+tmp.total$val_relative <-  tmp.total$value/tmp.total$value_total
+
+############################
+
+p.primary_secondary_rel_stool <- ggplot(data=tmp.total, 
+       aes(x=Class, y=val_relative, fill=Primary_Secondary)) +
+  geom_bar(stat="identity", position="fill")+
+  scale_fill_manual(values=c("cadetblue1", "cadetblue4"),
+                    breaks=c("P", "S"),
+                    labels=c("Total primary", "Total secondary"))+theme_bw()+
+  ylab("Proportion") +xlab("")+
+  theme(strip.text = element_text(size=12),
+        legend.title=element_blank(), legend.position="bottom",
+        legend.text = element_text(size=10),
+        axis.title.x=element_blank(),
+        axis.title.y=element_text(size=12),
+        axis.text.y  = element_text( size=12),
+        axis.text.x = element_text( size = 12))+# remove facet spacing on x-direction
+  theme(panel.spacing.x = unit(0,"line")) +
+  # switch the facet strip label to outside 
+  # remove background color
+  theme(strip.background.x = element_rect(fill="gray78"),
+        strip.text.x = element_text(size = 12))
+
+p.primary_secondary_rel_stool
+```
+
+Boxplots of the total primary  concentration in each sample
+
+```{r p.primary_secondary_total_stool}
+total.primary_stool <- aggregate(value ~  SUBJECT_ID + Class + Primary_Secondary,
+                        df_metabol_box_stool.m.tot,  sum)
+
+p.primary_secondary_total_stool <- ggplot(subset(total.primary_stool, Class != "AH"), 
+              aes(x=Class, y=value, fill = Class)) +
+  geom_boxplot() + 
+  facet_grid(~Primary_Secondary, scales = "free_x", space = 'free',
+             labeller=labeller(Primary_Secondary = labels_Primary))+
+  #geom_point(size = 3, position = position_jitter(width = 0.1, 
+  #              height = 0), alpha = 0.5) +
+  theme_bw() + scale_y_log10(labels = scales::math_format())+
+  theme(legend.position = "right",
+        axis.title = element_text(color="black", size=10),
+        axis.text = element_text(color="black", size=10),
+        legend.title = element_blank(),
+        legend.text=element_text(size=8),
+        axis.text.x = element_text(angle = 0, vjust = 0.5, hjust=1)) +
+  scale_color_manual(values = c("darkolivegreen4",  "red", "darkred")) +
+  scale_fill_manual(values = c("darkolivegreen4",  "red", "darkred")) +
+  ylab("Peak") +
+  xlab("")+
+       theme(panel.spacing = unit(0,"line"))
+
+p.primary_secondary_total_stool
+```
+
+T-tests on the log scale: primary
+
+```{r, echo = TRUE}
+total.primary.lm_stool <- lm(log10(value) ~ Class, 
+                       data = subset(total.primary_stool, Class != "AH" & Primary_Secondary == "P"))
+anova(total.primary.lm_stool)
+
+total.primary.lsm <- lsmeans::lsmeans(total.primary.lm_stool, pairwise~Class)
+total.primary.lsm
+```
+
+T-tests on the log scale: secondary
+
+```{r, echo = TRUE}
+total.secondary.lm_stool <- lm(log10(value) ~ Class, 
+                       data = subset(total.primary_stool, Class != "AH" & Primary_Secondary == "S"))
+anova(total.secondary.lm_stool)
+
+total.secondary.lsm <- lsmeans::lsmeans(total.secondary.lm_stool, pairwise~Class)
+total.secondary.lsm
+```
+
+Conjugated unconjugated
+
+```{r cong_unconj_rel_stool}
+###########################
+#Class 1 for heat heatmap
+###########################
+#df_metabol_box.m
+tmp <- aggregate(value ~ BIOCHEMICAL + Class + Conj_Unconj,df_metabol_box_stool.m, mean)
+
+#total primary and total secondary
+totals_chemical <- aggregate(value ~ BIOCHEMICAL + Class + Conj_Unconj,df_metabol_box_stool.m,sum)
+totals <- aggregate(value ~  Class,df_metabol_box_stool.m, sum)
+total.conj_stool <- aggregate(value ~  Class+ Conj_Unconj,df_metabol_box_stool.m, sum)
+
+tmp.total <- merge(total.conj_stool, totals, 
+                   by = "Class", suffixes = c("", "_total"))
+
+tmp.total$val_relative <-  tmp.total$value/tmp.total$value_total
+
+############################
+
+
+p.cong_unconj_rel_stool <- ggplot(data=tmp.total, 
+       aes(x=Class, y=val_relative, fill=Conj_Unconj)) +
+  geom_bar(stat="identity", position="fill")+
+  scale_fill_manual(values=c("cadetblue1", "cadetblue4"),
+                    breaks=c("C", "UC"),
+                    labels=c("Total conjugated", "Total unconjugated"))+theme_bw()+
+  ylab("Proportion") +xlab("")+
+  theme(strip.text = element_text(size=12),
+        legend.title=element_blank(), legend.position="bottom",
+        legend.text = element_text(size=10),
+        axis.title.x=element_blank(),
+        axis.title.y=element_text(size=12),
+        axis.text.y  = element_text( size=12),
+        axis.text.x = element_text( size = 12))+# remove facet spacing on x-direction
+  theme(panel.spacing.x = unit(0,"line")) +
+  # switch the facet strip label to outside 
+  # remove background color
+  theme(strip.background.x = element_rect(fill="gray78"),
+        strip.text.x = element_text(size = 12))
+
+p.cong_unconj_rel_stool
+```
+
+Boxplots of the total conjugated  concentration in each sample
+
+```{r p.cong_unconj_total_stool}
+total.conj_stool <- aggregate(value ~  SUBJECT_ID + Class+Conj_Unconj,
+                        df_metabol_box_stool.m, sum)
+
+p.cong_unconj_total_stool <- ggplot(subset(total.conj_stool, Class != "AH"), 
+              aes(x=Class, y=value, fill = Class)) +
+  geom_boxplot() + 
+  facet_grid(~Conj_Unconj, scales = "free_x", space = 'free',
+             labeller=labeller(Conj_Unconj = labels_Conjug))+
+  #geom_point(size = 3, position = position_jitter(width = 0.1, 
+  #              height = 0), alpha = 0.5) +
+  theme_bw() + scale_y_log10(labels = scales::math_format())+
+  theme(legend.position = "right",
+        axis.title = element_text(color="black", size=10),
+        axis.text = element_text(color="black", size=10),
+        legend.title = element_blank(),
+        legend.text=element_text(size=8),
+        axis.text.x = element_text(angle = 0, vjust = 0.5, hjust=1)) +
+  scale_color_manual(values = c("darkolivegreen4",  "red", "darkred")) +
+  scale_fill_manual(values = c("darkolivegreen4",  "red", "darkred")) +
+  ylab("Peak") +
+  xlab("")+
+       theme(panel.spacing = unit(0,"line"))
+
+p.cong_unconj_total_stool
+```
+T-tests on the log scale: conjugated
+
+```{r, echo = TRUE}
+total.conj.lm_stool <- lm(log10(value) ~ Class, 
+                       data = subset(total.conj_stool, Class != "AH" & Conj_Unconj == "C"))
+anova(total.conj.lm_stool)
+```
+
+T-tests on the log scale: unconjugated
+
+```{r, echo = TRUE}
+total.unconj.lm_stool <- lm(log10(value) ~ Class, 
+                       data = subset(total.conj_stool, Class != "AH" & Conj_Unconj == "UC"))
+anova(total.unconj.lm_stool)
+
+total.unconj.lsm <- lsmeans::lsmeans(total.unconj.lm_stool, pairwise~Class)
+total.unconj.lsm
+```
+
+
+
+
+
+## Plasma total primary and total secondary heatmaps
+
+```{r primary_secondary_rel_plasma}
+###########################
+#Class 1 for heat heatmap
+###########################
+df_metabol_box_plasma.m.tot <- subset(df_metabol_box_plasma.m, Primary_Secondary %in% c("P", "S"))
+tmp <- aggregate(value ~ BIOCHEMICAL + Class + Primary_Secondary,df_metabol_box_plasma.m.tot, mean)
+#total primary and total secondary
+totals <- aggregate(value ~  Class,df_metabol_box_plasma.m.tot , sum)
+total.conj <- aggregate(value ~  Class + Primary_Secondary,df_metabol_box_plasma.m.tot , sum)
+
+tmp.total <- merge(total.conj, totals, 
+                   by = "Class", suffixes = c("", "_total"))
+
+tmp.total$val_relative <-  tmp.total$value/tmp.total$value_total
+
+############################
+
+
+p.primary_secondary_rel_plasma <- ggplot(data=tmp.total, 
+       aes(x=Class, y=val_relative, fill=Primary_Secondary)) +
+  geom_bar(stat="identity", position="fill")+
+  scale_fill_manual(values=c("cadetblue1", "cadetblue4"),
+                    breaks=c("P", "S"),
+                    labels=c("Total primary", "Total secondary"))+theme_bw()+
+  ylab("Proportion") +xlab("")+
+  theme(strip.text = element_text(size=12),
+        legend.title=element_blank(), legend.position="bottom",
+        legend.text = element_text(size=10),
+        axis.title.x=element_blank(),
+        axis.title.y=element_text(size=12),
+        axis.text.y  = element_text( size=12),
+        axis.text.x = element_text( size = 12))+# remove facet spacing on x-direction
+  theme(panel.spacing.x = unit(0,"line")) +
+  # switch the facet strip label to outside 
+  # remove background color
+  theme(strip.background.x = element_rect(fill="gray78"),
+        strip.text.x = element_text(size = 12))
+
+p.primary_secondary_rel_plasma
+```
+
+Boxplots of the total secondary  concentration in each sample
+
+```{r p.primary_secondary_total_plasma}
+total.primary_plasma <- aggregate(value ~  SUBJECT_ID + Class + Primary_Secondary,
+                        df_metabol_box_plasma.m.tot, sum)
+
+p.primary_secondary_total_plasma <- ggplot(subset(total.primary_plasma, Class != "AH"), 
+              aes(x=Class, y=value, fill = Class)) +
+  geom_boxplot() + 
+  facet_grid(~Primary_Secondary, scales = "free_x", space = 'free',
+             labeller=labeller(Primary_Secondary = labels_Primary))+
+  #geom_point(size = 3, position = position_jitter(width = 0.1, 
+  #              height = 0), alpha = 0.5) +
+  theme_bw() + scale_y_log10(labels = scales::math_format())+
+  theme(legend.position = "right",
+        axis.title = element_text(color="black", size=10),
+        axis.text = element_text(color="black", size=10),
+        legend.title = element_blank(),
+        legend.text=element_text(size=8),
+        axis.text.x = element_text(angle = 0, vjust = 0.5, hjust=1)) +
+  scale_color_manual(values = c("green", "darkolivegreen4",  "red", "darkred")) +
+  scale_fill_manual(values = c("green","darkolivegreen4",  "red", "darkred")) +
+  ylab("Peak") +
+  xlab("")+
+       theme(panel.spacing = unit(0,"line"))
+p.primary_secondary_total_plasma
+```
+
+T-tests on the log scale:primary
+
+```{r, echo = TRUE}
+total.primary.lm_plasma <- lm(log10(value) ~ Class, 
+                       data = subset(total.primary_plasma, Class != "AH" & Primary_Secondary == "P"))
+anova(total.primary.lm_plasma)
+
+total.primary.lsm <- lsmeans::lsmeans(total.primary.lm_plasma, pairwise~Class)
+total.primary.lsm
+```
+
+
+T-tests on the log scale: secondary
+
+```{r, echo = TRUE}
+total.secondary.lm_plasma <- lm(log10(value) ~ Class, 
+                       data = subset(total.primary_plasma, Class != "AH" & Primary_Secondary == "S"))
+anova(total.secondary.lm_plasma)
+total.secondary.lsm <- lsmeans::lsmeans(total.secondary.lm_plasma, pairwise~Class)
+total.secondary.lsm
+```
+
+Conjugated unconjugated
+
+```{r cong_unconj_rel_plasma}
+###########################
+#Class 1 for heat heatmap
+###########################
+#df_metabol_box.m
+tmp <- aggregate(value ~ BIOCHEMICAL + Class + Conj_Unconj,df_metabol_box_plasma.m, mean)
+#total primary and total secondary
+totals_chemical <- aggregate(value ~ BIOCHEMICAL + Class + Conj_Unconj,df_metabol_box_plasma.m,sum)
+totals <- aggregate(value ~  Class,df_metabol_box_plasma.m , sum)
+total.conj_plasma <- aggregate(value ~  Class+ Conj_Unconj,df_metabol_box_plasma.m , sum)
+
+tmp.total <- merge(total.conj_plasma, totals, 
+                   by = "Class", suffixes = c("", "_total"))
+
+tmp.total$val_relative <-  tmp.total$value/tmp.total$value_total
+
+############################
+
+
+p.cong_unconj_rel_plasma <- ggplot(data=tmp.total, 
+       aes(x=Class, y=val_relative, fill=Conj_Unconj)) +
+  geom_bar(stat="identity", position="fill")+
+  scale_fill_manual(values=c("cadetblue1", "cadetblue4"),
+                    breaks=c("C", "UC"),
+                    labels=c("Total conjugated", "Total unconjugated"))+theme_bw()+
+  ylab("Proportion") +xlab("")+
+  theme(strip.text = element_text(size=12),
+        legend.title=element_blank(), legend.position="bottom",
+        legend.text = element_text(size=10),
+        axis.title.x=element_blank(),
+        axis.title.y=element_text(size=12),
+        axis.text.y  = element_text( size=12),
+        axis.text.x = element_text( size = 12))+# remove facet spacing on x-direction
+  theme(panel.spacing.x = unit(0,"line")) +
+  # switch the facet strip label to outside 
+  # remove background color
+  theme(strip.background.x = element_rect(fill="gray78"),
+        strip.text.x = element_text(size = 12))
+
+p.cong_unconj_rel_plasma
+```
+Boxplots of the total conjugated  concentration in each sample
+
+```{r p.cong_unconj_total_plasma}
+total.conj_plasma <- aggregate(value ~  SUBJECT_ID + Class + Conj_Unconj,
+                        df_metabol_box_plasma.m, sum)
+
+p.cong_unconj_total_plasma <- ggplot(subset(total.conj_plasma, Class != "AH"), 
+              aes(x=Class, y=value, fill = Class)) +
+  geom_boxplot() + 
+  facet_grid(~Conj_Unconj, scales = "free_x", space = 'free',
+             labeller=labeller(Conj_Unconj = labels_Conjug))+
+  #geom_point(size = 3, position = position_jitter(width = 0.1, 
+  #              height = 0), alpha = 0.5) +
+  theme_bw() + scale_y_log10(labels = scales::math_format())+
+  theme(legend.position = "right",
+        axis.title = element_text(color="black", size=10),
+        axis.text = element_text(color="black", size=10),
+        legend.title = element_blank(),
+        legend.text=element_text(size=8),
+        axis.text.x = element_text(angle = 0, vjust = 0.5, hjust=1)) +
+  scale_color_manual(values = c("green","darkolivegreen4",  "red", "darkred")) +
+  scale_fill_manual(values = c("green","darkolivegreen4",  "red", "darkred")) +
+  ylab("Peak") +
+  xlab("")+
+       theme(panel.spacing = unit(0,"line"))
+
+p.cong_unconj_total_plasma
+```
+
+T-tests on the log scale: conjugated
+
+```{r, echo = TRUE}
+#Conj_Unconj == "C"
+total.conj.lm_plasma <- lm(log10(value) ~ Class, 
+                       data = subset(total.conj_plasma, Class != "AH" & Conj_Unconj == "C"))
+anova(total.conj.lm_plasma)
+
+total.conj.lsm <- lsmeans::lsmeans(total.conj.lm_plasma, pairwise~Class)
+total.conj.lsm
+```
+
+
+T-tests on the log scale: unconjugated
+
+```{r, echo = TRUE}
+total.unconj.lm_plasma <- lm(log10(value) ~ Class, 
+                       data = subset(total.conj_plasma, Class != "AH" & Conj_Unconj == "UC"))
+anova(total.unconj.lm_plasma)
+```
+
+
+
+
+# Precursor: 7-alpha-hydroxy-3-oxo-4-cholestenoate (7-Hoca)	2530
+
+```{r}
+#7-alpha-hydroxy-3-oxo-4-cholestenoate (7-Hoca)	M_2530
+#data_stool_all[,c("M_2530")] #not identified in stool
+M_2530_df <- data_plasma_all[,c("PARENT_SAMPLE_ID",  "CLIENT_IDENTIFIER",
+                                 "SUBJECT_ID",  "age",  "BMI",  "GENDER",
+                                  "race", "Class",   "type",
+                                   "M_2530")] 
+
+M_2530_df.m <- melt(M_2530_df[,c("type", "Class", "M_2530")], id.vars = c("type", "Class"))
+#merge metabolite and sample info and do boxplot
+M_2530_df.m <- merge(M_2530_df.m, metabol_plasma,
+                        by.x = "variable", by.y = "row.names")
+
+p.M_2530_df_plasma <- ggplot(M_2530_df.m, 
+              aes(x=value, y=BIOCHEMICAL, fill = Class)) +
+  geom_boxplot() + 
+  #geom_point(size = 3, position = position_jitter(width = 0.1, 
+  #              height = 0), alpha = 0.5) +
+  theme_bw() + scale_x_log10(labels = scales::math_format())+
+  theme(legend.position = "right",
+        axis.title = element_text(color="black", size=10),
+        axis.text = element_text(color="black", size=10),
+        legend.title = element_blank(),
+        legend.text=element_text(size=8),
+        axis.text.x = element_text(angle = 0, vjust = 0.5, hjust=1)) +
+  scale_color_manual(values = c("green","darkolivegreen4",  "red", "darkred")) +
+  scale_fill_manual(values = c("green","darkolivegreen4",  "red", "darkred")) +
+  xlab("Peak") +
+  ylab("")+
+       theme(panel.spacing = unit(0,"line"))
+
+
+```
+
+T-tests on the log scale:7-HOCA
+
+```{r, echo = TRUE}
+
+HOCA.lm_plasma <- lm(log10(value) ~ Class,  data = M_2530_df.m)
+anova(HOCA.lm_plasma)
+
+HOCA.lm_plasma.lsm <- lsmeans::lsmeans(HOCA.lm_plasma, pairwise~Class)
+HOCA.lm_plasma.lsm
+```
+
+
+# Figure 1
+
+put 7-hoca in the middel as separator
+```{r figure1, fig.width = 12, fig.height = 10}
+figure1_1_top <- plot_grid(
+                      p.primary_secondary_total_plasma, p.primary_secondary_total_stool,
+                      p.primary_secondary_rel_plasma, p.primary_secondary_rel_stool,
+                      labels = c('(A)', '(D)', '(B)', '(E)'), 
+                      label_size = 13, nrow = 2, hjust = 0.01,
+                      rel_widths  = c(1,1,1,1))
+
+figure1_bottom <- plot_grid(p.cong_unconj_total_plasma, p.cong_unconj_total_stool,
+                            p.cong_unconj_rel_plasma, p.cong_unconj_rel_stool,
+                     labels = c('(F)', '(H)', '(G)', "(I)"),
+                     label_size = 13, nrow = 2,hjust = 0.01,
+                      rel_widths  = c(1,1,1,1))
+                      
+
+figure1 <- plot_grid(figure1_1_top, p.M_2530_df_plasma,figure1_bottom,
+                     labels = c('', '(C)', ""),
+                     label_size = 13, nrow = 3, hjust = 0.01,
+                      rel_heights  = c(2, 1, 2))
+
+figure1                     
+```
+
+
+
+# Figure 2: significant metabolites in healthy to heavy drinking comparison
+
+
+```{r figure2, fig.width = 22, fig.height = 20}
+tmp1 <- subset(df_metabol_box_plasma.m, 
+                          BIOCHEMICAL %in% names_sign_plasma_BIOCHEMICAL &
+                            Class %in% c("HC", "HDC"))
+tmp1$Comparison <- "Plasma HDC vs HC" 
+
+tmp2 <- subset(df_metabol_box_plasma.m, 
+                          BIOCHEMICAL %in% names_sign_plasma_BIOCHEMICAL &
+                            Class %in% c("HDC", "AH"))
+tmp2$Comparison <- "Plasma AH vs HDC" 
+
+tmp3 <- subset(df_metabol_box_stool.m, 
+            BIOCHEMICAL %in% names_sign_stool_BIOCHEMICAL & 
+              Class %in% c("HDC", "AH"))
+tmp3$Comparison <- "Stool AH vs HDC" 
+
+tmp <- rbind(tmp1,tmp2, tmp3)
+tmp$Comparison <- factor(tmp$Comparison, levels = c("Plasma HDC vs HC", "Plasma AH vs HDC",
+                                                    "Stool AH vs HDC"))
+
+figure2 <- ggplot(tmp, 
+              aes(x=BIOCHEMICAL, y=value, fill = Class)) +
+  geom_boxplot() + 
+  #geom_point(size = 3, position = position_jitter(width = 0.1, 
+  #              height = 0), alpha = 0.5) +
+  facet_grid(Comparison~Grouping + Primary_Secondary, scales = "free", space = 'free',
+             labeller=labeller(Grouping = labels_Grouping, Primary_Secondary = labels_Primary))+
+  theme_bw() + scale_y_log10(labels = scales::math_format())+
+  theme(legend.position = "right",
+        strip.text = element_text(size=22),
+        axis.title = element_text(color="black", size=22),
+        axis.text = element_text(color="black", size=22),
+        legend.title = element_blank(),
+        legend.text=element_text(size=22),
+        axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1)) +
+  scale_color_manual(values = c("HC" = "green", "HDC"= "darkolivegreen4", "AH"= "gold", "MAH"="red","SAH"= "darkred")) +
+  scale_fill_manual(values = c("HC" = "green", "HDC"= "darkolivegreen4", "AH"= "gold", "MAH"="red","SAH"= "darkred")) +
+  ylab("Peak") +
+  xlab("")+
+       theme(panel.spacing = unit(0,"line"))
+
+figure2
+```
+
+# Figure 5: Correlation plots
+
+```{r figure5, fig.width = 30, fig.height = 25}
+figure5 <- plot_grid(CorBileAcidTaxa_HDC,
+                     CorBileAcidTaxa_SAH,
+                      labels = c('A','B'), 
+                      label_size = 25, nrow = 2,
+                      rel_widths  = c(1,1),
+                     rel_heights  = c(1,1))
+figure5
+```
+
+
+
+
+# Stool Random forest models for prediction of AH and disease severity
+
+## AH prediction model in stool
+
+```{r}
+library(randomForest)
+fitRF <- function(data, nfolds, nvar, Metabol_names, mtry_grid, criteria = c("IncNodePurity", "%IncMSE")){
+  
+  fit_control <- trainControl( method = "cv",
+                    number=nfolds,
+                    classProbs = TRUE,
+                    savePredictions = TRUE) 
+
+ 
+  RF_classify_cv <- train(y~. , data = data, 
+                    method="rf", importance=TRUE, ntree=501, 
+                    tuneGrid=data.frame(mtry=mtry_grid), 
+                    trControl=fit_control,
+                    preProcess=c("center", "scale"))
+  
+RF_classify_imp <- as.data.frame( importance(RF_classify_cv$finalModel))
+#merge actual metabolites names from taxa table  
+RF_classify_imp <- merge(RF_classify_imp, Metabol_names, 
+                         by.x = "row.names", by.y = "ID")
+
+  if(criteria == "%IncMSE"){
+    names(RF_classify_imp)[names(RF_classify_imp) == "%IncMSE"] <- "PercIncMSE"
+    criteria <- "PercIncMSE"}
+RF_classify_imp <- RF_classify_imp[order(RF_classify_imp[,criteria], decreasing =  TRUE),] 
+
+#variables to plot
+plot.df <- RF_classify_imp[1:nvar,]
+plot.df$BIOCHEMICAL <- factor(plot.df$BIOCHEMICAL,
+                                    levels = plot.df$BIOCHEMICAL)
+
+aes_str <- aes_string(x=paste("reorder(BIOCHEMICAL,", criteria, ")"),  weight=criteria)
+#x=reorder(features, MeanDecreaseGini)
+p.RF.classify.imp <- ggplot(plot.df, aes_str) + 
+  geom_bar(fill = "red") +
+  #scale_x_discrete("", limits = plot.df$BIOCHEMICAL,
+  #                 labels = plot.df$features)+
+  coord_flip()+
+  theme_bw()+
+  theme(axis.text.x = element_text( size = 12),
+        axis.title.x = element_text( size = 12),
+        axis.text.y = element_text( size = 8))+
+  ylab("Variable Importance Measure") +
+  xlab("")
+
+
+return(list(RF_classify_cv = RF_classify_cv, p.RF.classify.imp = p.RF.classify.imp,
+            RF_classify_imp = RF_classify_imp))
+}
+```
+
+
+```{r}
+
+y <- ifelse(data_stool_BA$Class == "HDC", "HDC", "AH")
+mtx_BA_rf <- data.frame(y, log10(data_stool_BA[,c(metabol_names_stool_BA)]))
+
+ntaxa <- length(metabol_names_stool_BA)
+stool_rf_AH <- fitRF(data = mtx_BA_rf, nfolds=5, nvar= ntaxa, 
+                       Metabol_names = MetabolCompare_stool, 
+                       mtry_grid = floor(seq(6,sqrt(ntaxa), length = 5)),
+                       criteria = "MeanDecreaseGini")
+
+stool_rf_AH$RF_classify_cv$finalModel
+```
+
+```{r p_rf_stool_HDC_AH}
+fig4D <- stool_rf_AH$p.RF.classify.imp+ggtitle("Stool HDC vs AH")
+fig4D
+```
+
+
+```{r p_rf_stool_auc_HDC_AH}
+library(pROC)
+pred <- predict(stool_rf_AH$RF_classify_cv$finalModel, type="prob")[,"AH"]#predict cases
+auc <- roc(ifelse(mtx_BA_rf$y == "AH", 1,0),pred)#set to 1 if AH -- i.e. case
+
+p.roc <- ggroc(auc, color = "darkred")+
+      annotate("text", x = 0.25, y = 0.75, label = paste("AUC =", round(auc$auc[1],3)),
+               color = "darkred", size = 6)+
+  theme_bw()+  theme(axis.title.x = element_text( size=12), 
+                          axis.text.x  = element_text( size=12),
+                          axis.text.y  = element_text( size=12),
+                          axis.title.y=element_text(size=12))
+fig4B <-p.roc +ggtitle("Stool HDC vs AH")
+fig4B
+```
+
+## Disease severity in stool
+
+
+```{r}
+data_stool_BA_sev <- subset(data_stool_BA,
+                            Class %in% c("MAH", "SAH"))
+       
+y <- data_stool_BA_sev$Class
+mtx_BA_rf_sev <- data.frame(y, log10(data_stool_BA_sev[,c(metabol_names_stool_BA)]))
+
+ntaxa <- length(metabol_names_stool_BA)
+stool_rf_sev <- fitRF(data = mtx_BA_rf_sev, nfolds=5, nvar= ntaxa, 
+                       Metabol_names = MetabolCompare_stool, 
+                       mtry_grid = floor(seq(6,sqrt(ntaxa), length = 5)),
+                       criteria = "MeanDecreaseGini")
+
+stool_rf_sev$RF_classify_cv$finalModel
+
+p.stool_rf_sev <-  stool_rf_sev$p.RF.classify.imp + ggtitle("Stool MAH vs SAH")
+```
+
+
+```{r p_rf_stool_auc_SAH}
+
+pred <- predict(stool_rf_sev$RF_classify_cv$finalModel, type="prob")[,"SAH"]#predict cases
+auc <- roc(ifelse(mtx_BA_rf_sev$y == "SAH", 1,0),pred)#set to 1 if AH -- i.e. case
+
+p.roc.stool_rf_sev <- ggroc(auc, color = "darkred")+
+      annotate("text", x = 0.25, y = 0.75, label = paste("AUC =", round(auc$auc[1],3)),
+               color = "darkred", size = 6)+
+  theme_bw()+  theme(axis.title.x = element_text( size=12), 
+                          axis.text.x  = element_text( size=12),
+                          axis.text.y  = element_text( size=12),
+                          axis.title.y=element_text(size=12))+
+  ggtitle("Stool MAH vs SAH")
+
+```
+
+
+# Plasma Random forest models for prediction of AH and disease severity
+
+## AH prediction model in plasma
+
+```{r}
+data_plasma_BA.rf <- subset(data_plasma_BA, Class %in% c("HDC", "MAH", "SAH"))
+y <- ifelse(data_plasma_BA.rf$Class == "HDC", "HDC", "AH")
+mtx_BA_rf <- data.frame(y, log10(data_plasma_BA.rf[,c(metabol_names_plasma_BA)]))
+
+ntaxa <- length(metabol_names_plasma_BA)
+plasma_rf_AH <- fitRF(data = mtx_BA_rf, nfolds=5, nvar= ntaxa, 
+                       Metabol_names = MetabolCompare_plasma, 
+                       mtry_grid = floor(seq(6,sqrt(ntaxa), length = 5)),
+                       criteria = "MeanDecreaseGini")
+
+plasma_rf_AH$RF_classify_cv$finalModel
+```
+
+```{r p_rf_plasma_HDC_AH}
+fig4C <- plasma_rf_AH$p.RF.classify.imp+ggtitle("Plasma HDC vs AH")
+fig4C
+```
+
+
+```{r p_rf_plasma_auc_HDC_AH}
+pred <- predict(plasma_rf_AH$RF_classify_cv$finalModel, type="prob")[,"AH"]#predict cases
+auc <- roc(ifelse(mtx_BA_rf$y == "AH", 1,0),pred)#set to 1 if AH -- i.e. case
+
+p.roc <- ggroc(auc, color = "darkred")+
+      annotate("text", x = 0.25, y = 0.75, label = paste("AUC =", round(auc$auc[1],3)),
+               color = "darkred", size = 6)+
+  theme_bw()+  theme(axis.title.x = element_text( size=12), 
+                          axis.text.x  = element_text( size=12),
+                          axis.text.y  = element_text( size=12),
+                          axis.title.y=element_text(size=12))
+fig4A <-p.roc+ggtitle("Plasma HDC vs AH")
+fig4A
+```
+
+## Disease severity in plasma
+
+
+```{r}
+data_plasma_BA_sev <- subset(data_plasma_BA,
+                            Class %in% c("MAH", "SAH"))
+       
+y <- data_plasma_BA_sev$Class
+mtx_BA_rf_sev <- data.frame(y, log10(data_plasma_BA_sev[,c(metabol_names_plasma_BA)]))
+
+ntaxa <- length(metabol_names_stool_BA)
+plasma_rf_sev <- fitRF(data = mtx_BA_rf_sev, nfolds=5, nvar= ntaxa, 
+                       Metabol_names = MetabolCompare_plasma, 
+                       mtry_grid = floor(seq(6,sqrt(ntaxa), length = 5)),
+                       criteria = "MeanDecreaseGini")
+
+plasma_rf_sev$RF_classify_cv$finalModel
+
+p.plasma_rf_sev <- plasma_rf_sev$p.RF.classify.imp+ggtitle("Plasma MAH vs SAH")
+```
+
+
+```{r p_rf_auc_SAH}
+
+pred <- predict(plasma_rf_sev$RF_classify_cv$finalModel, type="prob")[,"SAH"]#predict cases
+auc <- roc(ifelse(mtx_BA_rf_sev$y == "SAH", 1,0),pred)#set to 1 if AH -- i.e. case
+
+p.roc.plasma_rf_sev <- ggroc(auc, color = "darkred")+
+      annotate("text", x = 0.25, y = 0.75, label = paste("AUC =", round(auc$auc[1],3)),
+               color = "darkred", size = 6)+
+  theme_bw()+  theme(axis.title.x = element_text( size=12), 
+                          axis.text.x  = element_text( size=12),
+                          axis.text.y  = element_text( size=12),
+                          axis.title.y=element_text(size=12))+
+  ggtitle("Plasma MAH vs SAH")
+
+
+
+```
+
+# Figure 4
+
+
+```{r figure4, fig.width = 8, fig.height = 6}
+
+figure4 <- plot_grid(fig4A, fig4C,
+                     fig4B, fig4D,  
+                      labels = c('(A)', '(C)', '(B)', '(D)'), 
+                      label_size = 10, ncol = 2,
+                      rel_widths  = c(0.8, 1.2),
+                      rel_heights = c(0.9,1.1))
+figure4
+
+```
+
+# Supplementary figure 1
+
+Prediction of disease severity
+
+```{r figureS1, fig.width = 8, fig.height = 6}
+
+
+figureS1 <- plot_grid(p.roc.plasma_rf_sev, p.plasma_rf_sev,
+                      p.roc.stool_rf_sev, p.stool_rf_sev,  
+                      labels = c('(A)', '(C)', '(B)', '(D)'), 
+                      label_size = 10, ncol = 2,
+                      rel_widths  = c(0.8, 1.2),
+                      rel_heights = c(0.9,1.1))
+figureS1
+```
+
+
+# MELD score univariate prediction
+
+```{r}
+library(ggpubr)
+library(ggpmisc)
+#run univariate analysis predicting meld score by each BA and extract R^2
+# do it for the HDC vs AH and for the disease severity models
+run.univ.lm <- function(data, vars, pred){
+
+res.df = data.frame(matrix(vector(), length(vars), 3,
+                dimnames=list(c(), c("coeff", "p_val", "R_sq"))),
+                stringsAsFactors=F)
+rownames(res.df) <- vars
+p.list <- list()
+  for (j in 1:length(vars)){
+    fm <- as.formula(paste(pred, "~", vars[j]))
+    lm.fit <- lm(fm, data = data)
+    res_vec <- c(summary(lm.fit)$coefficients[2, 
+                which(colnames(summary(lm.fit)$coefficients) == "Estimate")],
+      summary(lm.fit)$coefficients[2, which(colnames(summary(lm.fit)$coefficients) == "Pr(>|t|)")],
+      summary(lm.fit)$r.squared)
+      res.df[j,] <- res_vec
+      
+      #add model fit plot
+      p.list[[j]] <- ggplot(data = data,mapping = aes_string(x = vars[j], y = pred)) +
+        geom_point()+
+        geom_smooth(data =data, 
+                    method = "lm", color="blue", fill="grey40", se=TRUE) +
+        stat_regline_equation(aes(label = paste(..eq.label.., ..rr.label.., sep = "~~~"),
+                                  ), size = 6) +
+        #stat_regline_equation(aes(label = ..rr.label..)) +
+        theme_bw()
+
+  }
+
+return(list(res=res.df, p= p.list))
+
+}
+```
+
+```{r}
+#y <- ifelse(data_stool_BA$Class == "HDC", "HDC", "AH")
+#mtx_BA_rf <- data.frame(y, data_stool_BA[,c(metabol_names_stool_BA)])
+data_stool_BA_log10 <- data.frame(data_stool_BA[,!colnames(data_stool_BA) %in% c(metabol_names_stool_BA)],
+  log10(data_stool_BA[,c(metabol_names_stool_BA)]))
+meld.pred.stool.fit<- run.univ.lm(data= data_stool_BA_log10, vars = metabol_names_stool_BA, pred ="MELD_SCORE")
+#meld model for the AH severity
+meld.pred.stool.sev.fit <- run.univ.lm(data= subset(data_stool_BA_log10, Class %in% c("MAH", "SAH")), 
+                                           vars = metabol_names_stool_BA, pred ="MELD_SCORE")
+
+#all(rownames(meld.pred.stool) == rownames(meld.pred.stool.sev))
+meld.pred.stool <- cbind(meld.pred.stool.fit$res, meld.pred.stool.sev.fit$res)
+names(meld.pred.stool) <- paste0(names(meld.pred.stool), 
+                                 c(rep("_AH", 3), rep("_Sev", 3)))
+metric.names <- names(meld.pred.stool)
+meld.pred.stool <- merge(metabol_stool, 
+                         meld.pred.stool, all.y = TRUE, 
+                         by.x = "row.names", by.y = "row.names")
+meld.pred.stool <- meld.pred.stool[, c("BIOCHEMICAL", "SUPER_PATHWAY","SUB_PATHWAY",
+                                       metric.names)]
+```
+
+Stool metabolites univariate meld prediction
+
+```{r}
+kable(meld.pred.stool, digits = 3) %>%
+  kable_styling(bootstrap_options = c("striped", "hover"), full_width = F)
+
+write.csv(meld.pred.stool, here::here("Results", "meld_pred_stool.csv"))
+```
+
+Severity prediction model with significant metabolite
+
+```{r}
+inx <- which(meld.pred.stool.sev.fit$res$p_val <0.05)
+sev.pred.plot <- meld.pred.stool.sev.fit$p[[inx]] +
+  #annotate("text", x = -0.6, y = 39, label = paste("p-value = ", round(meld.pred.stool.sev.fit$res$p_val[inx], 3)), 
+ #          size = 6)+ggtitle("Stool MELD score prediction")+
+  ylab("MELD SCORE") + xlab(paste0("log10(",meld.pred.stool$BIOCHEMICAL[inx], ")"))+
+  theme(axis.title.x = element_text( size=20), 
+                          axis.text.x  = element_text( size=20),
+                          axis.text.y  = element_text( size=20),
+                          axis.title.y=element_text(size=20),
+        plot.title = element_text(size=22))
+#sev.pred.plot
+```
+
+Plasma meld prediction
+
+
+```{r}
+#y <- ifelse(data_plasma_BA$Class == "HDC", "HDC", "AH")
+#mtx_BA_rf <- data.frame(y, data_plasma_BA[,c(metabol_names_plasma_BA)])
+data_plasma_BA_log10 <- data.frame(data_plasma_BA[,!colnames(data_plasma_BA) %in% c(metabol_names_plasma_BA)],
+  log10(data_plasma_BA[,c(metabol_names_plasma_BA)]))
+meld.pred.plasma.fit<- run.univ.lm(data= subset(data_plasma_BA_log10, Class %in% c("HDC", "MAH", "SAH")),
+                                   vars = metabol_names_plasma_BA, pred ="MELD_SCORE")
+#meld model for the AH severity
+meld.pred.plasma.sev.fit <- run.univ.lm(data= subset(data_plasma_BA_log10, Class %in% c("MAH", "SAH")), 
+                                           vars = metabol_names_plasma_BA, pred ="MELD_SCORE")
+
+#all(rownames(meld.pred.plasma) == rownames(meld.pred.plasma.sev))
+meld.pred.plasma <- cbind(meld.pred.plasma.fit$res, meld.pred.plasma.sev.fit$res)
+names(meld.pred.plasma) <- paste0(names(meld.pred.plasma), 
+                                 c(rep("_AH", 3), rep("_Sev", 3)))
+metric.names <- names(meld.pred.plasma)
+meld.pred.plasma <- merge(metabol_plasma, 
+                         meld.pred.plasma, all.y = TRUE, 
+                         by.x = "row.names", by.y = "row.names")
+meld.pred.plasma <- meld.pred.plasma[, c("BIOCHEMICAL", "SUPER_PATHWAY","SUB_PATHWAY",
+                                       metric.names)]
+```
+
+plasma metabolites univariate meld prediction
+
+```{r}
+kable(meld.pred.plasma, digits = 3) %>%
+  kable_styling(bootstrap_options = c("striped", "hover"), full_width = F)
+
+write.csv(meld.pred.plasma, here::here("Results", "meld_pred_plasma.csv"))
+```
+
+Severity prediction model with significant metabolite
+
+```{r}
+inx <- which(meld.pred.plasma.sev.fit$res$p_val <0.05)
+sev.pred.plasma.plot1 <- meld.pred.plasma.sev.fit$p[[inx[1]]] +
+  #annotate("text", x = 0.7, y = 30, label = paste("p-value = ", round(meld.pred.plasma.sev.fit$res$p_val[inx[1]], 3)), 
+ #          size = 6)+ggtitle("Plasma MELD score prediction")+
+  ylab("MELD SCORE") + xlab(paste0("log10(",meld.pred.plasma$BIOCHEMICAL[inx[1]], ")"))+
+  theme(axis.title.x = element_text( size=20), 
+                          axis.text.x  = element_text( size=20),
+                          axis.text.y  = element_text( size=20),
+                          axis.title.y=element_text(size=20),
+        plot.title = element_text(size=22))
+#sev.pred.plasma.plot1
+```
+
+```{r}
+sev.pred.plasma.plot2 <- meld.pred.plasma.sev.fit$p[[inx[2]]] +
+  #annotate("text", x = 0.7, y = 35, label = paste("p-value = ", round(meld.pred.plasma.sev.fit$res$p_val[inx[2]], 3)), 
+#           size = 6)+ggtitle("Plasma MELD score prediction")+
+  ylab("MELD SCORE") + xlab(paste0("log10(",meld.pred.plasma$BIOCHEMICAL[inx[2]], ")"))+
+  theme(axis.title.x = element_text( size=20), 
+                          axis.text.x  = element_text( size=20),
+                          axis.text.y  = element_text( size=20),
+                          axis.title.y=element_text(size=20),
+        plot.title = element_text(size=22))
+#sev.pred.plasma.plot2
+```
+
+
+# Figure 3: significant metabolites in M to S alcoholic hepatitis comparison 
+
+
+```{r}
+tmp1 <- subset(df_metabol_box_plasma.m, 
+                          BIOCHEMICAL %in% names_sign_plasma_BIOCHEMICAL &
+                            Class %in% c("MAH", "SAH"))
+tmp1$Comparison <- "Plasma SAH vs MAH" 
+
+tmp2 <- subset(df_metabol_box_stool.m, 
+            BIOCHEMICAL %in% names_sign_stool_BIOCHEMICAL & 
+              Class %in% c("MAH", "SAH"))
+tmp2$Comparison <- "Stool SAH vs MAH" 
+
+tmp <- rbind(tmp1,tmp2)
+tmp$Comparison <- factor(tmp$Comparison, levels = c("Plasma SAH vs MAH",  "Stool SAH vs MAH"))
+
+figure3_top <- ggplot(tmp, 
+              aes(x=BIOCHEMICAL, y=value, fill = Class)) +
+  geom_boxplot() + 
+  #geom_point(size = 3, position = position_jitter(width = 0.1, 
+  #              height = 0), alpha = 0.5) +
+  facet_grid(Comparison~Grouping + Primary_Secondary, scales = "free", space = 'free',
+             labeller=labeller(Grouping = labels_Grouping, Primary_Secondary = labels_Primary))+
+  theme_bw() + scale_y_log10(labels = scales::math_format())+
+  theme(legend.position = "right",
+        strip.text = element_text(size=20),
+        axis.title = element_text(color="black", size=20),
+        axis.text = element_text(color="black", size=20),
+        legend.title = element_blank(),
+        legend.text=element_text(size=18),
+        axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1)) +
+  scale_color_manual(values = c("HC" = "green", "HDC"= "darkolivegreen4", "AH"= "gold", "MAH"="red","SAH"= "darkred")) +
+  scale_fill_manual(values = c("HC" = "green", "HDC"= "darkolivegreen4", "AH"= "gold", "MAH"="red","SAH"= "darkred")) +
+  ylab("Peak") +
+  xlab("")+
+       theme(panel.spacing = unit(0,"line"))
+```
+
+
+
+
+```{r figure3, fig.width = 22, fig.height = 20}
+
+figure3_middle <- plot_grid(sev.pred.plasma.plot1,
+                     sev.pred.plasma.plot2,
+                     sev.pred.plot,
+                      labels = c('(B)', '(C)', '(D)'), 
+                      label_size = 25, ncol = 3,
+                      rel_widths  = c(1,1,1))
+
+figure3 <- plot_grid(figure3_top,
+                     figure3_middle,
+                      labels = c("(A)", ""), 
+                      label_size = 25, nrow = 2,
+                      rel_heights  = c(2.5,1))
+figure3
+```
+
