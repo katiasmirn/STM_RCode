@@ -389,11 +389,12 @@ Stool data
 
 ```{r demog_stool}
 
+metabol_sample_stool$TLFB_AVG_drinksDD[metabol_sample_stool$studyid == "21094"] <- 16
 demog = metabol_sample_stool
 
 vars =   c("age", "GENDER", "BMI", "race",  "HEMOGLOBIN", "WBC", 
              "PLATELET", "CREATININE", "AST", "ALT", "TOTAL_BILIRUBIN", "ALBUMIN", 
-             "INR", "MELD_SCORE", "CHILDPUGH_SCORE", "DF_SCORE")
+             "INR", "MELD_SCORE", "CHILDPUGH_SCORE", "DF_SCORE", "TLFB_AVG_drinksDD")
 
 
 demog$race[demog$race ==1] <- "American Indian or Alaska Native"
@@ -430,6 +431,68 @@ tab <- print(tab, printToggle = FALSE, showAllLevels = TRUE)
 
 kable(tab[,!(colnames(tab) %in% "test")], digits =3)%>%
   kable_styling(bootstrap_options = c("striped", "hover"), full_width = F)
+
+#missing number of drinks
+#metabol_sample_stool[is.na(metabol_sample_stool$TLFB_AVG_drinksDD), 
+#                      c("SUBJECT_ID", "studyid", "Class", "TLFB_AVG_drinksDD")]
+
+```
+
+Association between demographic variables and bile acids
+
+
+```{r}
+library(ggpubr)
+library(ggpmisc)
+#run univariate analysis predicting meld score by each BA and extract R^2
+# do it for the HDC vs AH and for the disease severity models
+run.lm <- function(data, vars, pred){
+
+res.df = sapply(vars,function(x) NULL)
+
+  for (j in 1:length(vars)){
+    fm <- as.formula(paste(vars[j], "~", paste(pred, collapse = "+" )))
+    lm.fit <- lm(fm, data = data)
+    res.df[[j]] <- data.frame(summary(lm.fit)$coefficients)
+  }
+
+return(res.df)
+
+}
+```
+
+```{r}
+#y <- ifelse(data_stool_BA$Class == "HDC", "HDC", "AH")
+#mtx_BA_rf <- data.frame(y, data_stool_BA[,c(metabol_names_stool_BA)])
+data_stool_BA_log10 <- data.frame(data_stool_BA[,!colnames(data_stool_BA) %in% c(metabol_names_stool_BA)],
+  log10(data_stool_BA[,c(metabol_names_stool_BA)]))
+
+#predict BA concentration based on demographics
+demogr.pred.stool.fit <- run.lm(data= data_stool_BA_log10, 
+                                      vars = metabol_names_stool_BA, 
+                                      pred = c("GENDER", "BMI", "race"))
+
+demogr.pred.stool.fit <- lapply(demogr.pred.stool.fit, function(x) tibble::rownames_to_column(x, "VALUE"))
+
+demogr.pred.stool.fit <- ldply(demogr.pred.stool.fit, data.frame)
+
+metric.names<- names(demogr.pred.stool.fit)[-1]
+
+demogr.pred.stool.fit <- merge(metabol_stool, 
+                         demogr.pred.stool.fit, all.y = TRUE, 
+                         by.x = "row.names", by.y = ".id")
+
+demogr.pred.stool.fit <- demogr.pred.stool.fit[, c("BIOCHEMICAL", "SUPER_PATHWAY","SUB_PATHWAY",
+                                       metric.names)]
+```
+
+Stool metabolites univariate meld prediction
+
+```{r}
+#kable(demogr.pred.stool.fit, digits = 3) %>%
+#  kable_styling(bootstrap_options = c("striped", "hover"), full_width = F)
+
+write.csv(demogr.pred.stool.fit, here::here("Results", "demogr_pred_stool.csv"))
 ```
 
 Plasma data
@@ -440,7 +503,7 @@ demog = metabol_sample_plasma
 demog$INR[demog$Class == "HC"] <- NA
 vars =   c("age", "GENDER", "BMI", "race",  "HEMOGLOBIN", "WBC", 
              "PLATELET", "CREATININE", "AST", "ALT", "TOTAL_BILIRUBIN", "ALBUMIN", 
-             "INR", "MELD_SCORE", "CHILDPUGH_SCORE", "DF_SCORE")
+             "INR", "MELD_SCORE", "CHILDPUGH_SCORE", "DF_SCORE", "TLFB_AVG_drinksDD")
 
 
 demog$race[demog$race ==1] <- "American Indian or Alaska Native"
@@ -477,6 +540,44 @@ tab <- print(tab, printToggle = FALSE, showAllLevels = TRUE)
 
 kable(tab[,!(colnames(tab) %in% "test")], digits =3)%>%
   kable_styling(bootstrap_options = c("striped", "hover"), full_width = F)
+
+#missing number of drinks
+#metabol_sample_plasma[is.na(metabol_sample_plasma$TLFB_AVG_drinksDD) & metabol_sample_plasma$Group != "HC", 
+#                      c("SUBJECT_ID", "Group", "TLFB_AVG_drinksDD")]
+```
+
+
+```{r}
+#y <- ifelse(data_stool_BA$Class == "HDC", "HDC", "AH")
+#mtx_BA_rf <- data.frame(y, data_stool_BA[,c(metabol_names_stool_BA)])
+data_plasma_BA_log10 <- data.frame(data_plasma_BA[,!colnames(data_plasma_BA) %in% c(metabol_names_plasma_BA)],
+  log10(data_plasma_BA[,c(metabol_names_plasma_BA)]))
+
+#predict BA concentration based on demographics
+demogr.pred.plasma.fit <- run.lm(data= data_plasma_BA_log10, 
+                                      vars = metabol_names_plasma_BA, 
+                                      pred = c("GENDER", "BMI", "race"))
+
+demogr.pred.plasma.fit <- lapply(demogr.pred.plasma.fit, function(x) tibble::rownames_to_column(x, "VALUE"))
+demogr.pred.plasma.fit <- ldply(demogr.pred.plasma.fit, data.frame)
+
+metric.names<- names(demogr.pred.plasma.fit)[-1]
+
+demogr.pred.plasma.fit <- merge(metabol_plasma, 
+                         demogr.pred.plasma.fit, all.y = TRUE, 
+                         by.x = "row.names", by.y = ".id")
+
+demogr.pred.plasma.fit <- demogr.pred.plasma.fit[, c("BIOCHEMICAL", "SUPER_PATHWAY","SUB_PATHWAY",
+                                       metric.names)]
+```
+
+plasma metabolites univariate meld prediction
+
+```{r}
+#kable(demogr.pred.plasma.fit, digits = 3) %>%
+#  kable_styling(bootstrap_options = c("striped", "hover"), full_width = F)
+
+write.csv(demogr.pred.plasma.fit, here::here("Results", "demogr_pred_plasma.csv"))
 ```
 
 
